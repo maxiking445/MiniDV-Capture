@@ -1,0 +1,21 @@
+# Local optional package: run makepkg from packaging/ with the repository present.
+pkgname=minidv-capture
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Native MiniDV capture and verified conversion'
+arch=('any')
+license=('MIT')
+depends=('python' 'pyside6' 'qt6-svg' 'dvgrab' 'ffmpeg' 'polkit')
+optdepends=('qt6-wayland: native Wayland support')
+source=()
+sha256sums=()
+package() {
+    local project_dir="$startdir/.."
+    install -dm755 "$pkgdir/opt/minidv-capture" "$pkgdir/usr/bin"
+    cp -a "$project_dir/minidv_capture" "$project_dir/assets" "$project_dir/scripts" "$pkgdir/opt/minidv-capture/"
+    install -m755 "$project_dir/start.sh" "$pkgdir/opt/minidv-capture/start.sh"
+    ln -s /opt/minidv-capture/start.sh "$pkgdir/usr/bin/minidv-capture"
+    install -Dm644 "$project_dir/packaging/minidv-capture.desktop" "$pkgdir/usr/share/applications/minidv-capture.desktop"
+    install -Dm644 "$project_dir/assets/minidv-capture.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/minidv-capture.svg"
+    install -Dm644 "$project_dir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

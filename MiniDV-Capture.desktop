@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MiniDV Capture
+Comment=Capture and convert MiniDV tapes
+Exec=python3 -c "import os,sys; os.chdir(os.path.dirname(sys.argv[1])); os.execv('./start.sh',['./start.sh'])" %k
+Icon=minidv-capture
+Terminal=false
+Categories=AudioVideo;Video;Recorder;
+StartupWMClass=minidv-capture

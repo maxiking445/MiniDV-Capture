@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MiniDV Capture
+Comment=Capture and convert MiniDV tapes
+Exec=minidv-capture
+Icon=minidv-capture
+Terminal=false
+Categories=AudioVideo;Video;Recorder;
+StartupWMClass=minidv-capture

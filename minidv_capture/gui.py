@@ -169,6 +169,8 @@ class MainWindow(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setWordWrap(True)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.job_context_menu)
         self.table.itemSelectionChanged.connect(self.show_job_log)
         split.addWidget(self.table)
         self.logs = QPlainTextEdit()
@@ -436,7 +438,7 @@ class MainWindow(QMainWindow):
                     detail = (f'Capturing · {session.rate / 1e6:.1f} MB/s\n{session.bytes / 1e9:.2f} GB · '
                               f'{int(elapsed)//60:02}:{int(elapsed)%60:02} / 90:00 (est.)')
                 else:
-                    detail = 'Waiting for PLAY' if job['options']['manual'] else 'Waiting for DV data / rewinding'
+                    detail = 'Waiting for PLAY' if session.manual else 'Waiting for DV data / rewinding'
                 return percent, 'Capture ≈', detail
             return 0, 'Capture ≈', 'Waiting for DV data'
         detail = {
@@ -445,9 +447,11 @@ class MainWindow(QMainWindow):
             'cancelled': 'Cancelled · raw footage kept', 'interrupted': 'Interrupted · raw footage kept',
         }.get(state, 'Stopped')
         if self.queue.job is job:
-            detail = {'probe-source': 'Inspecting source video', 'encode': 'Converting video',
+            detail = {'probe-source': 'Inspecting source video',
                       'probe-result': 'Checking output metadata', 'decode-check': 'Verifying video and audio'
                       }.get(self.queue.phase, detail)
+            if self.queue.phase == 'encode':
+                detail = f'Converting video · {self.queue.active_encoder}' if self.queue.active_encoder else 'Converting video'
         value = 0 if state == 'queued' else min(100, max(0, job.get('progress', 0)))
         return value, 'Conversion' if state in {'queued', 'converting', 'verifying', 'done', 'conversion_error'} else 'Stopped', job.get('error') or detail
 
@@ -455,6 +459,65 @@ class MainWindow(QMainWindow):
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
         return next((j for j in self.store.jobs if item and j['id'] == item.data(Qt.ItemDataRole.UserRole)), None)
+
+    def job_context_menu(self, position):
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+        self.table.selectRow(index.row())
+        job = self.selected_job()
+        if not job:
+            return
+        menu = QMenu(self)
+        retry = menu.addAction('Retry conversion')
+        retry_states = {'error', 'cancelled', 'interrupted', 'conversion_error'}
+        raw = Path(job['raw'])
+        retry.setEnabled(job['state'] in retry_states and raw.is_file() and raw.stat().st_size > 0)
+        retry.triggered.connect(lambda _checked=False, target=job: self.retry_job(target))
+        resume = menu.addAction('Resume capture')
+        resume.setEnabled(job.get('capture_incomplete', False)
+                          and job['state'] in {'error', 'cancelled', 'interrupted'})
+        resume.triggered.connect(lambda _checked=False, target=job: self.resume_capture(target))
+        menu.addSeparator()
+        remove = menu.addAction('Remove')
+        remove.setToolTip('Remove this entry from history; keep all video and log files.')
+        remove.setEnabled(job['state'] not in {'capturing', 'queued', 'converting', 'verifying'})
+        remove.triggered.connect(lambda _checked=False, target=job: self.remove_history_job(target))
+        menu.exec(self.table.viewport().mapToGlobal(position))
+
+    def retry_job(self, job):
+        try:
+            self.queue.retry(job)
+        except (OSError, ValueError) as exc:
+            self.error(str(exc))
+
+    def resume_capture(self, job):
+        dialog = QMessageBox(QMessageBox.Icon.Question, 'Resume capture',
+            'Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. '
+            'Capture will start without rewinding; press PLAY on the camera when the app is waiting. '
+            'The new DV segment will be appended to the existing tape capture when you stop it.',
+            QMessageBox.StandardButton.NoButton, self)
+        start = dialog.addButton('Start capture', QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
+        if dialog.clickedButton() != start:
+            return
+        try:
+            self.captures.resume(job)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self.error(str(exc))
+
+    def remove_history_job(self, job):
+        try:
+            removed = self.store.remove(job)
+        except (OSError, ValueError) as exc:
+            self.error(str(exc))
+            return
+        if removed:
+            if self.selected_job() is None:
+                self.logs.clear()
+            self.refresh()
+            self.statusBar().showMessage('Removed from history. Video and log files were kept.', 10000)
 
     def show_job_log(self):
         job = self.selected_job()
@@ -541,10 +604,7 @@ class MainWindow(QMainWindow):
         job = self.selected_job()
         if not job:
             return
-        try:
-            self.queue.retry(job)
-        except (OSError, ValueError) as exc:
-            self.error(str(exc))
+        self.retry_job(job)
 
     def open_folder(self):
         job = self.selected_job()

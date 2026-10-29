@@ -67,7 +67,10 @@ use **Start next tape** in the completion popup.
 
 Captures are stored as numbered tape folders. Original DV files are preserved
 by default. Conversion supports MP4/H.264, MKV/H.265, MOV/ProRes and lossless
-DV-in-AVI; codec availability depends on the installed FFmpeg build.
+DV-in-AVI. MP4 and MKV automatically try NVIDIA NVENC or Intel/AMD VAAPI when
+FFmpeg, the GPU driver and device access support it, then retry with CPU
+encoding if hardware encoding fails. ProRes uses CPU; DV-in-AVI is a stream
+copy. Final file verification still decodes on the CPU.
 
 ## Build from source
 

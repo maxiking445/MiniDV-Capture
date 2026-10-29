@@ -2,13 +2,15 @@ from pathlib import Path
 import os
 import shutil
 import time
+import uuid
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 from .devices import Device, discover
 from .process import available, executable, interrupt
 from .storage import Store
 
 
-def capture_arguments(device: Device, manual: bool, directory: Path, rewind=False, broadcast=False):
+def capture_arguments(device: Device, manual: bool, directory: Path, rewind=False, broadcast=False,
+                     output_name='capture'):
     args = ['-format', 'raw', '-size', '0', '-buffers', '500']
     if manual or broadcast:
         if device.card < 0:
@@ -23,7 +25,7 @@ def capture_arguments(device: Device, manual: bool, directory: Path, rewind=Fals
         args += ['-guid', '0x' + device.guid]
     if not manual and rewind:
         args += ['-rewind']
-    return args + [str(directory / 'capture')]
+    return args + [str(directory / output_name)]
 
 
 class CaptureSession(QObject):
@@ -32,9 +34,13 @@ class CaptureSession(QObject):
     completed = Signal(dict)
     failed = Signal(dict)
 
-    def __init__(self, store: Store, job: dict, device: Device, parent=None):
+    def __init__(self, store: Store, job: dict, device: Device, parent=None, resume=False):
         super().__init__(parent)
         self.store, self.job, self.device = store, job, device
+        self.resume = resume
+        self.manual = True if resume else job['options']['manual']
+        self.rewind = False if resume else job['options'].get('rewind', False)
+        self.output_name = f'capture-resume-{uuid.uuid4().hex}' if resume else 'capture'
         self.process = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
         env.insert('LC_ALL', 'C')
@@ -64,9 +70,9 @@ class CaptureSession(QObject):
         peers = [d for d in discover() if d.bus == self.device.bus]
         broadcast = self.device.card >= 0 and len(peers) == 1 and peers[0].guid == self.device.guid
         self.process.setProgram(executable('dvgrab'))
-        self.process.setArguments(capture_arguments(self.device, self.job['options']['manual'],
-                                 Path(self.job['directory']), self.job['options'].get('rewind', False),
-                                 broadcast=broadcast))
+        self.process.setArguments(capture_arguments(self.device, self.manual,
+                                 Path(self.job['directory']), self.rewind,
+                                 broadcast=broadcast and not self.resume, output_name=self.output_name))
         self.log.emit('dvgrab ' + ' '.join(self.process.arguments()))
         self.process.start()
         self.timer.start()
@@ -89,8 +95,8 @@ class CaptureSession(QObject):
     def poll(self):
         now = time.monotonic()
         try:
-            raw = Path(self.job['raw'])
-            size = raw.stat().st_size if raw.exists() else 0
+            segments = list(Path(self.job['directory']).glob(self.output_name + '*.dv'))
+            size = sum(part.stat().st_size for part in segments if part.is_file())
             self.rate = max(0, size - self.bytes)
             if size > self.bytes:
                 self.last_data = now
@@ -131,23 +137,31 @@ class CaptureSession(QObject):
         self.read_log()
         self.finished_once = True
         self.timer.stop()
-        raw = Path(self.job['raw'])
-        self.bytes = raw.stat().st_size if raw.exists() else 0
+        segments = list(Path(self.job['directory']).glob(self.output_name + '*.dv'))
+        self.bytes = sum(part.stat().st_size for part in segments if part.is_file())
         regular = self.reason == 'complete' or (
             not self.reason and code == 0 and status == QProcess.ExitStatus.NormalExit
             and not self.job['options']['manual'])
         # Never accept a forced kill, empty file, extra segments or reported drops.
         regular = regular and code == 0 and status != QProcess.ExitStatus.CrashExit and self.bytes > 0 and not self.damaged
-        segments = list(Path(self.job['directory']).glob('capture*.dv'))
         regular = regular and len(segments) == 1
         if regular:
-            self.store.update(self.job, state='queued', bytes=self.bytes, error='')
-            self.completed.emit(self.job)
+            try:
+                if self.resume:
+                    self.store.finish_resume_merge(self.job)
+                else:
+                    self.store.update(self.job, state='queued', bytes=self.bytes,
+                                      capture_incomplete=False, error='')
+                self.completed.emit(self.job)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.store.update(self.job, state='error', capture_incomplete=True,
+                                  error=f'Could not safely append the resumed capture: {exc}')
+                self.failed.emit(self.job)
         else:
             error = self.job.get('error') or ('Cancelled; raw footage kept.' if self.reason == 'cancel'
                     else 'Incomplete capture or damaged/dropped frames. Check the raw footage and capture.log.')
             self.store.update(self.job, state='cancelled' if self.reason == 'cancel' else 'error',
-                              bytes=self.bytes, error=error)
+                              bytes=self.bytes, capture_incomplete=True, error=error)
             self.failed.emit(self.job)
         self.changed.emit()
 
@@ -191,6 +205,37 @@ class CaptureManager(QObject):
         if previous:
             previous.deleteLater()
         self.sessions[fresh.guid] = session
+        session.changed.connect(self.changed)
+        session.log.connect(self.log)
+        session.completed.connect(self.completed)
+        session.failed.connect(self.failed)
+        session.start()
+        self.changed.emit()
+        return session
+
+    def resume(self, job):
+        if not job.get('capture_incomplete'):
+            raise ValueError('This tape has no interrupted capture to continue.')
+        if job['state'] not in {'interrupted', 'error', 'cancelled'}:
+            raise ValueError('Only interrupted or incomplete captures can be continued.')
+        raw = Path(job['raw'])
+        if raw.is_symlink() or not raw.is_file() or raw.stat().st_size <= 0:
+            raise ValueError('No partial DV capture is available to continue.')
+        device = next((d for d in discover() if d.guid == job['device']['guid']), None)
+        if device is None:
+            raise RuntimeError('The original camera is not connected. Connect it over FireWire and rescan.')
+        if not device.accessible:
+            raise RuntimeError('No read/write access to ' + device.node + '. Enable device access through Setup.')
+        if any(s.active and (s.device.guid == device.guid or s.device.bus == device.bus) for s in self.sessions.values()):
+            raise RuntimeError('A capture is already running on this FireWire bus.')
+        if shutil.disk_usage(job['directory']).free < 2 * 1024**3:
+            raise RuntimeError('At least 2 GiB of free space is required to continue a capture.')
+        self.store.update(job, state='capturing', capture_incomplete=True, error='')
+        session = CaptureSession(self.store, job, device, self, resume=True)
+        previous = self.sessions.get(device.guid)
+        if previous:
+            previous.deleteLater()
+        self.sessions[device.guid] = session
         session.changed.connect(self.changed)
         session.log.connect(self.log)
         session.completed.connect(self.completed)

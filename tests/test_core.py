@@ -13,7 +13,8 @@ from PySide6.QtWidgets import QApplication
 from minidv_capture.devices import Device, discover
 from minidv_capture.storage import Store, fingerprint, delete_verified_source
 from minidv_capture.capture import CaptureSession, CaptureManager, capture_arguments
-from minidv_capture.conversion import ConversionQueue, FORMATS, verify_metadata
+from minidv_capture.conversion import (ConversionQueue, FORMATS, verify_metadata,
+    video_encoder_candidates, conversion_arguments)
 
 APP = QApplication.instance() or QApplication([])
 DEVICE = Device('000085000014cad9', 'Testkamera', '/dev/fw1', '/test/bus', 0, True)
@@ -105,8 +106,37 @@ class StorageTests(Base):
     def test_restart_keeps_partial(self):
         job = self.job(delete_raw=True)
         Path(job['raw']).write_bytes(b'partial')
-        self.assertEqual(Store(self.store.path).jobs[0]['state'], 'interrupted')
+        restarted = Store(self.store.path).jobs[0]
+        self.assertEqual(restarted['state'], 'interrupted')
+        self.assertTrue(restarted['capture_incomplete'])
         self.assertEqual(Path(job['raw']).read_bytes(), b'partial')
+
+    def test_restart_queues_interrupted_conversion_automatically(self):
+        job = self.job()
+        Path(job['raw']).write_bytes(b'complete DV recording')
+        self.store.update(job, state='converting', progress=47, capture_incomplete=False)
+
+        restarted = Store(self.store.path).jobs[0]
+
+        self.assertEqual(restarted['state'], 'queued')
+        self.assertEqual(restarted['progress'], 0)
+        self.assertEqual(restarted['interrupted_from'], 'converting')
+        self.assertFalse(restarted['capture_incomplete'])
+        self.assertEqual(Path(job['raw']).read_bytes(), b'complete DV recording')
+
+    def test_finish_resume_merge_appends_segments_and_queues_conversion(self):
+        job = self.job()
+        raw = Path(job['raw'])
+        raw.write_bytes(b'original')
+        resumed = Path(job['directory']) / 'capture-resume-test.dv'
+        resumed.write_bytes(b'continued')
+
+        self.assertEqual(self.store.finish_resume_merge(job), len(b'originalcontinued'))
+
+        self.assertEqual(raw.read_bytes(), b'originalcontinued')
+        self.assertFalse(resumed.exists())
+        self.assertEqual(job['state'], 'queued')
+        self.assertFalse(job['capture_incomplete'])
 
     def test_corrupt_queue_not_overwritten(self):
         self.store.path.write_text('{broken')
@@ -254,6 +284,44 @@ class ConversionTests(Base):
         Path(job['raw']).write_bytes(self.sample.read_bytes())
         self.store.update(job, state='queued')
         return job
+
+    def test_hardware_encoder_is_preferred_with_cpu_fallback(self):
+        source = {'streams': [{'codec_type': 'video', 'field_order': 'progressive'}]}
+        candidates = video_encoder_candidates('MP4 / H.264', {'h264_nvenc'}, source)
+        self.assertEqual([c['codec'] for c in candidates], ['h264_nvenc', 'libx264'])
+        job = self.job(format='MP4 / H.264')
+        gpu_args = conversion_arguments(job, self.root / 'gpu.mp4', source, candidates[0])
+        cpu_args = conversion_arguments(job, self.root / 'cpu.mp4', source, candidates[1])
+        self.assertIn('h264_nvenc', gpu_args)
+        self.assertIn('-cq', gpu_args)
+        self.assertIn('libx264', cpu_args)
+
+    def test_vaapi_upload_filter_and_interlaced_cpu_preservation(self):
+        progressive = {'streams': [{'codec_type': 'video', 'field_order': 'progressive'}]}
+        job = self.job(format='MKV / H.265')
+        vaapi = {'backend': 'vaapi', 'codec': 'hevc_vaapi', 'device': '/dev/dri/renderD128'}
+        args = conversion_arguments(job, self.root / 'gpu.mkv', progressive, vaapi)
+        self.assertIn('/dev/dri/renderD128', args)
+        self.assertIn('format=nv12,hwupload', args[args.index('-vf') + 1])
+
+        interlaced = {'streams': [{'codec_type': 'video', 'field_order': 'bb'}]}
+        candidates = video_encoder_candidates('MP4 / H.264', {'h264_nvenc'}, interlaced, deinterlace=False)
+        self.assertEqual([c['codec'] for c in candidates], ['libx264'])
+
+    def test_failed_hardware_encoder_retries_on_cpu(self):
+        job = self.enqueue(format='MP4 / H.264')
+        candidates = [
+            {'backend': 'nvenc', 'codec': 'missing_test_encoder', 'label': 'Test GPU'},
+            {'backend': 'cpu', 'codec': 'libx264', 'label': 'CPU'},
+        ]
+        messages = []
+        queue = self.queue()
+        queue.log.connect(messages.append)
+        with patch('minidv_capture.conversion.video_encoder_candidates', return_value=candidates):
+            queue.pump()
+            wait_until(lambda: job['state'] in {'done', 'conversion_error'}, 45)
+        self.assertEqual(job['state'], 'done', job['error'])
+        self.assertTrue(any('retrying with CPU' in message for message in messages))
 
     def test_all_formats_real_ffmpeg(self):
         for fmt in FORMATS:

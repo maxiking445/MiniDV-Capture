@@ -108,7 +108,7 @@ class GuiTests(unittest.TestCase):
             job.update(state='converting', progress=42)
             self.window.refresh()
             self.assertEqual(bar.value(), 42)
-            self.assertEqual(self.window.table.item(0, 4).text(), 'Converting video')
+            self.assertIn('Converting video', self.window.table.item(0, 4).text())
             job.update(state='verifying', progress=90)
             self.window.refresh()
             self.assertIn('Verifying', self.window.table.item(0, 4).text())

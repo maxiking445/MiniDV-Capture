@@ -2,6 +2,7 @@ from pathlib import Path
 from fractions import Fraction
 import json
 import os
+import subprocess
 import time
 import uuid
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
@@ -59,20 +60,83 @@ def verify_metadata(source, result):
         raise ValueError('Audio streams, channels or sample rate missing/changed')
 
 
-def conversion_arguments(job, destination: Path, source_probe):
+def available_video_encoders():
+    """Return FFmpeg's compiled video encoder names without requiring a GPU."""
+    try:
+        result = subprocess.run([executable('ffmpeg'), '-hide_banner', '-encoders'],
+            capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    names = set()
+    for line in (result.stdout + result.stderr).splitlines():
+        columns = line.split()
+        if len(columns) >= 2 and columns[0].startswith('V'):
+            names.add(columns[1])
+    return names
+
+
+def video_encoder_candidates(fmt, encoders, source_probe, deinterlace=True):
+    """Prefer hardware video encoders, then always provide the CPU encoder."""
+    if fmt == 'MP4 / H.264':
+        codec, software = 'h264', 'libx264'
+    elif fmt == 'MKV / H.265':
+        codec, software = 'hevc', 'libx265'
+    else:
+        label = 'DV stream copy' if fmt == 'AVI / DV lossless' else 'CPU'
+        return [{'backend': 'cpu', 'codec': None, 'label': label}]
+
+    # Preserve interlaced output when deinterlacing is disabled; the CPU
+    # encoders below support the existing field-order configuration.
+    if not deinterlace and field_order(source_probe) in {'bb', 'bt', 'tt', 'tb'}:
+        return [{'backend': 'cpu', 'codec': software, 'label': 'CPU'}]
+
+    candidates = []
+    nvenc = f'{codec}_nvenc'
+    if nvenc in encoders:
+        candidates.append({'backend': 'nvenc', 'codec': nvenc, 'label': 'NVIDIA NVENC'})
+    vaapi = f'{codec}_vaapi'
+    if vaapi in encoders:
+        for device in sorted(Path('/dev/dri').glob('renderD*')):
+            candidates.append({'backend': 'vaapi', 'codec': vaapi, 'device': str(device),
+                               'label': f'VAAPI ({device.name})'})
+    candidates.append({'backend': 'cpu', 'codec': software, 'label': 'CPU'})
+    return candidates
+
+
+def conversion_arguments(job, destination: Path, source_probe, encoder=None):
     options = english_options(job['options'])
     fmt = options['format']
     quality = options.get('quality', 'Standard')
     crf = {'High': '17', 'Standard': '20', 'Compact': '24'}[quality]
-    args = ['-hide_banner', '-nostdin', '-n', '-xerror', '-threads', '2', '-i', job['raw'],
+    encoder = encoder or {'backend': 'cpu', 'codec': None}
+    backend = encoder['backend']
+    args = ['-hide_banner', '-nostdin', '-n', '-xerror', '-threads', '2']
+    if backend == 'vaapi':
+        args += ['-vaapi_device', encoder['device']]
+    args += ['-i', job['raw'],
             '-map', '0:v:0', '-map', '0:a?', '-map_metadata', '0']
     deinterlace = options.get('deinterlace', True) and fmt != 'AVI / DV lossless'
+    filters = []
     if deinterlace:
-        args += ['-vf', 'bwdif=mode=send_field:parity=auto:deint=all', '-filter_threads', '1']
+        filters.append('bwdif=mode=send_field:parity=auto:deint=all')
     if fmt == 'MP4 / H.264':
-        args += ['-c:v', 'libx264', '-preset', 'fast', '-crf', crf, '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart']
+        if backend == 'nvenc':
+            quality = {'High': '17', 'Standard': '20', 'Compact': '24'}[quality]
+            args += ['-c:v', encoder['codec'], '-preset', 'p4', '-rc', 'vbr', '-cq', quality, '-b:v', '0', '-pix_fmt', 'yuv420p']
+        elif backend == 'vaapi':
+            args += ['-c:v', encoder['codec'], '-qp', crf]
+        else:
+            args += ['-c:v', 'libx264', '-preset', 'fast', '-crf', crf, '-pix_fmt', 'yuv420p']
+        args += ['-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart']
     elif fmt == 'MKV / H.265':
-        args += ['-c:v', 'libx265', '-preset', 'fast', '-crf', crf, '-x265-params', 'pools=2:frame-threads=1', '-c:a', 'flac']
+        if backend == 'nvenc':
+            quality = {'High': '17', 'Standard': '20', 'Compact': '24'}[quality]
+            args += ['-c:v', encoder['codec'], '-preset', 'p4', '-rc', 'vbr', '-cq', quality, '-b:v', '0']
+        elif backend == 'vaapi':
+            args += ['-c:v', encoder['codec'], '-qp', crf]
+        else:
+            args += ['-c:v', 'libx265', '-preset', 'fast', '-crf', crf, '-x265-params', 'pools=2:frame-threads=1']
+        args += ['-c:a', 'flac']
     elif fmt == 'MOV / ProRes':
         profile = {'High': '3', 'Standard': '2', 'Compact': '1'}[quality]
         args += ['-c:v', 'prores_ks', '-profile:v', profile, '-pix_fmt', 'yuv422p10le', '-c:a', 'pcm_s16le']
@@ -83,13 +147,17 @@ def conversion_arguments(job, destination: Path, source_probe):
     if not deinterlace and fmt != 'AVI / DV lossless':
         field = field_order(source_probe)
         if field in {'bb', 'bt', 'tt', 'tb'}:
-            args += ['-flags', '+ilme+ildct', '-field_order', 'bb' if field in {'bb', 'bt'} else 'tt',
-                     '-vf', 'setfield=bff' if field in {'bb', 'bt'} else 'setfield=tff']
-            if fmt == 'MP4 / H.264':
+            args += ['-flags', '+ilme+ildct', '-field_order', 'bb' if field in {'bb', 'bt'} else 'tt']
+            filters.append('setfield=bff' if field in {'bb', 'bt'} else 'setfield=tff')
+            if backend == 'cpu' and fmt == 'MP4 / H.264':
                 args += ['-x264-params', 'bff=1' if field in {'bb', 'bt'} else 'tff=1']
-            if fmt == 'MKV / H.265':
+            if backend == 'cpu' and fmt == 'MKV / H.265':
                 i = args.index('-x265-params') + 1
                 args[i] += ':interlace=' + ('bff' if field in {'bb', 'bt'} else 'tff')
+    if backend == 'vaapi':
+        filters += ['format=nv12', 'hwupload']
+    if filters:
+        args += ['-vf', ','.join(filters), '-filter_threads', '1']
     args += ['-threads', '2', '-progress', 'pipe:1', '-nostats', str(destination)]
     return args
 
@@ -105,6 +173,9 @@ class ConversionQueue(QObject):
         self.process = None
         self.job = None
         self.phase = ''
+        self.active_encoder = ''
+        self.encoder_candidates = [None]
+        self.encoder_index = 0
         self.paused = False
         self.stopping = False
         self.buffer = bytearray()
@@ -206,6 +277,20 @@ class ConversionQueue(QObject):
         self.read_stdout()
         self.read_stderr()
         if self.stopping or code != 0 or status != QProcess.ExitStatus.NormalExit:
+            if self.phase == 'encode' and not self.stopping and self.encoder_index + 1 < len(self.encoder_candidates):
+                failed_encoder = self.encoder_candidates[self.encoder_index]
+                self.encoder_index += 1
+                next_encoder = self.encoder_candidates[self.encoder_index]
+                self.active_encoder = next_encoder['label']
+                try:
+                    self.partial.unlink(missing_ok=True)
+                except OSError as exc:
+                    self.fail(f'Could not remove failed partial output before encoder fallback: {exc}')
+                    return
+                self.log.emit(f'{failed_encoder["label"]} encoding failed; retrying with {next_encoder["label"]}.')
+                self.run('encode', 'ffmpeg', conversion_arguments(
+                    self.job, self.partial, self.source_probe, next_encoder))
+                return
             self.fail('Conversion interrupted/failed. Original kept.\n' + self.stderr_tail)
             return
         try:
@@ -213,7 +298,16 @@ class ConversionQueue(QObject):
                 self.source_probe = json.loads(bytes(self.buffer))
                 if not video(self.source_probe) or duration(self.source_probe) <= 0:
                     raise ValueError('Raw capture contains no valid video')
-                self.run('encode', 'ffmpeg', conversion_arguments(self.job, self.partial, self.source_probe))
+                fmt = english_options(self.job['options'])['format']
+                deinterlace = self.job['options'].get('deinterlace', True)
+                self.encoder_candidates = video_encoder_candidates(fmt, available_video_encoders(),
+                    self.source_probe, deinterlace)
+                self.encoder_index = 0
+                encoder = self.encoder_candidates[self.encoder_index]
+                self.active_encoder = encoder['label']
+                self.log.emit(f'Video encoder selected: {encoder["label"]}.')
+                self.run('encode', 'ffmpeg', conversion_arguments(
+                    self.job, self.partial, self.source_probe, encoder))
             elif self.phase == 'encode':
                 self.store.update(self.job, state='verifying')
                 self.run('probe-result', 'ffprobe', ['-v', 'error', '-show_format', '-show_streams', '-of', 'json', str(self.partial)])

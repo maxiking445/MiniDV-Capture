@@ -54,10 +54,30 @@ class Store:
                 raise RuntimeError(f'Cannot read queue: {path}\n{exc}') from exc
         for job in self.jobs:
             job['options'] = english_options(job['options'])
-            if job['state'] in {'capturing', 'converting', 'verifying'}:
+            if job['state'] == 'capturing':
+                previous_state = job['state']
+                job['interrupted_from'] = previous_state
+                job['capture_incomplete'] = True
                 job['state'] = 'interrupted'
-                job['error'] = 'Previous run interrupted. Raw files are kept; retry conversion explicitly.'
-                self.warning = 'Interrupted jobs found. Raw files were kept.'
+                job['error'] = 'Capture was interrupted. Raw files are kept; resume capture or retry conversion.'
+                self.warning = 'Interrupted captures found. Raw files were kept.'
+            elif job['state'] in {'converting', 'verifying'}:
+                previous_state = job['state']
+                job['interrupted_from'] = previous_state
+                job['capture_incomplete'] = False
+                job.update(state='queued', error='', progress=0, verified=False)
+                self.warning = 'Interrupted conversions were queued to restart automatically.'
+            elif job['state'] in {'error', 'cancelled'}:
+                job.setdefault('capture_incomplete', True)
+            elif job['state'] == 'interrupted':
+                job.setdefault('capture_incomplete', True)
+        for job in self.jobs:
+            if job.get('resume_merge_pending'):
+                try:
+                    self.finish_resume_merge(job)
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    job.update(state='error', capture_incomplete=True,
+                               error=f'Could not safely recover resumed capture merge: {exc}')
         self.save()
 
     def save(self):
@@ -69,6 +89,96 @@ class Store:
         atomic_json(self.path, {'version': 1, 'jobs': remaining})
         self.jobs = remaining
         return removed
+
+    def remove(self, job):
+        if job['state'] in {'capturing', 'queued', 'converting', 'verifying'}:
+            raise ValueError('Stop or finish this tape before removing it from history.')
+        index = next((i for i, item in enumerate(self.jobs) if item['id'] == job['id']), None)
+        if index is None:
+            return False
+        removed = self.jobs.pop(index)
+        try:
+            self.save()
+        except OSError:
+            self.jobs.insert(index, removed)
+            raise
+        return True
+
+    def finish_resume_merge(self, job):
+        """Atomically append saved continuation segments to this tape's DV file."""
+        directory = Path(job['directory']).resolve()
+        raw = Path(job['raw'])
+        if raw.is_symlink() or raw.name != 'capture001.dv' or raw.parent.resolve() != directory:
+            raise ValueError('Unsafe original DV path')
+        if not raw.is_file():
+            raise ValueError('Original DV capture is missing')
+        pending = job.get('resume_merge_pending')
+        if pending:
+            names = pending['parts']
+            base_size = int(pending['base_size'])
+            expected_size = int(pending['expected_size'])
+            sizes = pending['sizes']
+        else:
+            parts = sorted(directory.glob('capture-resume-*.dv'),
+                           key=lambda p: (p.stat().st_mtime_ns, p.name))
+            if not parts:
+                raise ValueError('No resumed DV segments were found')
+            if any(p.is_symlink() or p.parent.resolve() != directory or not p.is_file() for p in parts):
+                raise ValueError('Unsafe resumed DV segment path')
+            sizes = {p.name: p.stat().st_size for p in parts}
+            base_size = raw.stat().st_size
+            expected_size = base_size + sum(sizes.values())
+            names = list(sizes)
+            pending = {'parts': names, 'sizes': sizes, 'base_size': base_size,
+                       'expected_size': expected_size, 'base_fingerprint': fingerprint(raw)}
+            self.update(job, resume_merge_pending=pending)
+
+        if any(not isinstance(name, str) or Path(name).name != name
+               or not name.startswith('capture-resume-') or not name.endswith('.dv') for name in names):
+            raise ValueError('Unsafe resumed segment name')
+
+        if raw.stat().st_size == expected_size:
+            if fingerprint(raw) != pending.get('merged_fingerprint'):
+                raise ValueError('Merged DV file changed while continuation recovery was pending')
+            for name in names:
+                (directory / name).unlink(missing_ok=True)
+        elif raw.stat().st_size == base_size:
+            if fingerprint(raw) != pending.get('base_fingerprint'):
+                raise ValueError('Original DV file changed while continuation was pending')
+            parts = []
+            for name in names:
+                part = directory / name
+                if part.is_symlink() or part.parent.resolve() != directory or not part.is_file():
+                    raise ValueError(f'Resumed segment is missing or unsafe: {name}')
+                if part.stat().st_size != int(sizes[name]):
+                    raise ValueError(f'Resumed segment changed during merge: {name}')
+                parts.append(part)
+            temp = raw.with_name(raw.name + '.merge.tmp')
+            if temp.is_symlink():
+                raise ValueError('Unsafe temporary merge path')
+            with temp.open('wb') as output:
+                for source in [raw, *parts]:
+                    with source.open('rb') as incoming:
+                        while chunk := incoming.read(1024 * 1024):
+                            output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            pending['merged_fingerprint'] = fingerprint(temp)
+            self.update(job, resume_merge_pending=pending)
+            os.replace(temp, raw)
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            for part in parts:
+                part.unlink()
+        else:
+            raise ValueError('Original DV size changed while the continuation was pending')
+
+        job.pop('resume_merge_pending', None)
+        self.update(job, state='queued', capture_incomplete=False, bytes=expected_size, error='')
+        return expected_size
 
     def create(self, folder: Path, label: str, device: dict, options: dict) -> dict:
         folder = folder.expanduser().resolve()
@@ -86,7 +196,7 @@ class Store:
         job = {'id': uuid.uuid4().hex, 'name': directory.name, 'directory': str(directory),
                'raw': str(directory / 'capture001.dv'), 'device': device, 'options': options,
                'state': 'capturing', 'created': time.time(), 'error': '', 'output': '',
-               'verified': False, 'progress': 0}
+               'verified': False, 'progress': 0, 'capture_incomplete': True}
         self.jobs.append(job)
         self.update(job)
         return job

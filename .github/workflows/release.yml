@@ -100,7 +100,12 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add pyproject.toml minidv_capture/__init__.py packaging/PKGBUILD
-          git commit -m "chore: release ${RELEASE_TAG}"
+          if git diff --cached --quiet; then
+            echo "Version files already contain ${RELEASE_VERSION}; no version commit is needed."
+          else
+            git commit -m "chore: release ${RELEASE_TAG}"
+          fi
+          git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_VERSION}"
           git push origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${RELEASE_TAG}"
           gh release create "${RELEASE_TAG}" \
             dist/MiniDV-Capture-x86_64.AppImage \

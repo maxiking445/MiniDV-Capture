@@ -33,6 +33,7 @@ job.json
 *.wav
 *.flac
 *.AppImage
+*.deb
 *.pkg.tar.zst
 
 # Local configuration, editor files and OS metadata

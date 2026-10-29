@@ -11,13 +11,15 @@ python -m venv --system-site-packages .build-venv
 .build-venv/bin/python -m pip install 'pyinstaller>=6.16,<7' 'PySide6>=6.6,<7'
 mkdir -p build/packaging
 .build-venv/bin/python -m PyInstaller --noconfirm --clean --onedir --name minidv-capture \
-    --paths "$project_dir" --specpath build/packaging \
-    --add-data 'assets:assets' --add-data 'scripts:scripts' --add-data 'LICENSE:licenses' \
-    --add-data 'packaging/THIRD-PARTY.md:licenses' \
+    --paths "$project_dir" --specpath "$project_dir/build/packaging" \
+    --add-data "$project_dir/assets:assets" \
+    --add-data "$project_dir/scripts:scripts" \
+    --add-data "$project_dir/LICENSE:licenses" \
+    --add-data "$project_dir/packaging/THIRD-PARTY.md:licenses" \
     --add-binary "$(command -v dvgrab):bin" \
     --add-binary "$(command -v ffmpeg):bin" \
     --add-binary "$(command -v ffprobe):bin" \
-    packaging/entrypoint.py
+    "$project_dir/packaging/entrypoint.py"
 appdir="$project_dir/build/MiniDV-Capture.AppDir"
 # Only remove generated build output, never user recordings.
 if [[ -e "$appdir" ]]; then rm -rf -- "$appdir"; fi

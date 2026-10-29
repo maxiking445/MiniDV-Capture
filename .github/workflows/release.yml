@@ -87,6 +87,9 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: ./packaging/build-appimage.sh
 
+      - name: Build Debian package
+        run: ./packaging/build-deb.sh
+
       - name: Commit version, push tag and publish release
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
@@ -99,5 +102,7 @@ jobs:
           git add pyproject.toml minidv_capture/__init__.py packaging/PKGBUILD
           git commit -m "chore: release ${RELEASE_TAG}"
           git push origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${RELEASE_TAG}"
-          gh release create "${RELEASE_TAG}" dist/MiniDV-Capture-x86_64.AppImage \
+          gh release create "${RELEASE_TAG}" \
+            dist/MiniDV-Capture-x86_64.AppImage \
+            "dist/MiniDV-Capture_${RELEASE_VERSION}_amd64.deb" \
             --title "MiniDV Capture ${RELEASE_VERSION}" --generate-notes

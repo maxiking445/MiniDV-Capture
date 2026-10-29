@@ -1,4 +1,22 @@
-# MiniDV Capture
+<p align="center">
+  <img src="assets/minidv-capture.svg" alt="MiniDV Capture logo" width="192">
+</p>
+
+<h1 align="center">MiniDV Capture</h1>
+
+<p align="center">
+  <a href="https://github.com/maxiking445/MiniDV-Capture/actions/workflows/ci.yml">
+    <img src="https://github.com/maxiking445/MiniDV-Capture/actions/workflows/ci.yml/badge.svg" alt="CI status">
+  </a>
+  <a href="https://github.com/maxiking445/MiniDV-Capture/actions/workflows/release.yml">
+    <img src="https://github.com/maxiking445/MiniDV-Capture/actions/workflows/release.yml/badge.svg" alt="Release workflow status">
+  </a>
+  <br>
+  <img src="https://img.shields.io/github/license/maxiking445/MiniDV-Capture" alt="License">
+  <img src="https://img.shields.io/github/v/release/maxiking445/MiniDV-Capture" alt="Latest release">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10 or newer">
+  <img src="https://img.shields.io/badge/Linux-FireWire-FCC624?logo=linux&logoColor=black" alt="Linux FireWire">
+</p>
 
 A native Linux desktop application for capturing MiniDV tapes over FireWire,
 with a live preview and a background conversion queue. Built with Python,
@@ -205,6 +223,21 @@ built on a newer Linux base may not run on older systems.
 To build the optional Arch package, run `makepkg` from `packaging/`. The
 generated package archive is local build output and should not be committed.
 
+### Publish a GitHub release
+
+Open **Actions → Publish Release → Run workflow**. Enter
+`auto` to create `1.0.0` for the first release and increment the patch version
+for each later release (`1.0.1`, `1.0.2`, …), or enter a higher semantic version
+such as `1.2.0` yourself. The workflow runs the CI suite, builds the x86_64
+AppImage, updates the displayed/package version, commits that version bump,
+creates a matching `vX.Y.Z` tag, and publishes a GitHub Release with the single
+`MiniDV-Capture-x86_64.AppImage` executable. GitHub automatically provides the
+tagged source as ZIP and tar archives on the release page. The version badge
+shows the latest published release; the CI and Release badges show their
+respective workflow runs. In the repository's **Settings → Actions → General**,
+allow GitHub Actions to create and approve commits (read/write contents
+permission), so the release job can push its version commit and tag.
+
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
@@ -225,3 +258,8 @@ The first reported a damaged frame; the second had no dvgrab frame warning, but
 FFmpeg still reported bitstream and timecode errors. Reception is confirmed;
 error-free picture quality is not. Preview and conversion do not repair damaged
 source footage. Long captures and multiple controllers still need hardware tests.
+
+## AI disclosure
+
+This project was created with AI assistance. The maintainers are responsible for
+reviewing, testing and maintaining the code.

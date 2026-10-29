@@ -14,6 +14,7 @@ from .process import available
 from .preview import LivePreview
 from .preferences import english_options
 from .tape_change import TapeChangeWatcher
+from . import __version__
 from .setup import SetupDialog, project_root
 
 STATES = {'capturing': 'Capturing', 'queued': 'Queued', 'converting': 'Converting',
@@ -200,6 +201,10 @@ class MainWindow(QMainWindow):
         self.clear_history_button.setToolTip('Remove finished and failed jobs from the list. Keep video files and active or queued jobs.')
         self.clear_history_button.clicked.connect(self.clear_history)
         bottom.addWidget(self.clear_history_button)
+        self.version_label = QLabel(f'Version {__version__}')
+        self.version_label.setToolTip('MiniDV Capture application version')
+        bottom.insertWidget(0, self.version_label)
+        bottom.insertStretch(1, 1)
         layout.addLayout(bottom)
         layout.addLayout(buttons)
         self.tray = QSystemTrayIcon(self.windowIcon(), self)

@@ -1,0 +1,103 @@
+name: Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (auto increments patch; or enter e.g. 1.2.0)'
+        required: true
+        type: string
+        default: auto
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Ensure the release is based on the default branch
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/$DEFAULT_BRANCH" ]]; then
+            echo "Run releases from the default branch ($DEFAULT_BRANCH)." >&2
+            exit 1
+          fi
+
+      - name: Check out the tested commit and release tags
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Choose and validate release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          import subprocess
+
+          pattern = re.compile(r"v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+          tags = subprocess.check_output(["git", "tag", "--list", "v[0-9]*"], text=True).splitlines()
+          versions = [tuple(map(int, match.groups())) for tag in tags if (match := pattern.fullmatch(tag))]
+          latest = max(versions) if versions else None
+          request = os.environ["REQUESTED_VERSION"].strip()
+          if request.lower() == "auto":
+              version = (1, 0, 0) if latest is None else (latest[0], latest[1], latest[2] + 1)
+          else:
+              match = pattern.fullmatch(request)
+              if not match:
+                  raise SystemExit("Enter a stable MAJOR.MINOR.PATCH version, or 'auto'.")
+              version = tuple(map(int, match.groups()))
+              if latest is not None and version <= latest:
+                  raise SystemExit("The requested version must be higher than the latest release tag.")
+          value = ".".join(map(str, version))
+          print(f"version={value}")
+          print(f"tag=v{value}")
+          PY
+
+      - name: Update application and package versions
+        run: python scripts/set-version.py '${{ steps.version.outputs.version }}'
+
+      - name: Install AppImage build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes dvgrab ffmpeg libegl1 libxcb-cursor0 libxkbcommon-x11-0
+
+      - name: Build and smoke test the single-file AppImage
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./packaging/build-appimage.sh
+
+      - name: Commit version, push tag and publish release
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add pyproject.toml minidv_capture/__init__.py packaging/PKGBUILD
+          git commit -m "chore: release ${RELEASE_TAG}"
+          git push origin "HEAD:refs/heads/${DEFAULT_BRANCH}" "refs/tags/${RELEASE_TAG}"
+          gh release create "${RELEASE_TAG}" dist/MiniDV-Capture-x86_64.AppImage \
+            --title "MiniDV Capture ${RELEASE_VERSION}" --generate-notes

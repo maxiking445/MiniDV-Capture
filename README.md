@@ -17,33 +17,34 @@
   <img src="https://img.shields.io/badge/Linux-FireWire-FCC624?logo=linux&logoColor=black" alt="Linux FireWire">
 </p>
 
+## Quick start
+
+1. Connect your MiniDV camera to your Linux computer with **FireWire** and
+   switch the camera to **PLAYER / VCR** mode.
+2. Open the [latest release](https://github.com/maxiking445/MiniDV-Capture/releases/latest)
+   and download **one** of these files from **Assets**:
+   - **AppImage:** download `MiniDV-Capture-x86_64.AppImage`, then run:
+
+     ```bash
+     chmod +x MiniDV-Capture-x86_64.AppImage
+     ./MiniDV-Capture-x86_64.AppImage
+     ```
+
+   - **Ubuntu/Debian `.deb`:** download the `.deb`, then install it from the
+     download folder:
+
+     ```bash
+     sudo apt install ./MiniDV-Capture_*_amd64.deb
+     ```
+
+3. On first launch, click **Setup** and allow it to enable FireWire camera
+   access. Then choose your camera and click **Start capture**.
+
+The AppImage can be run directly. The `.deb` installs the app and its required
+packages. Both formats are available from the [latest release page](https://github.com/maxiking445/MiniDV-Capture/releases/latest).
+
 Capture MiniDV tapes over FireWire, preview video while recording, and convert
-your tapes with FFmpeg. The app keeps original DV recordings by default.
-
-## Download and install
-
-Open [the latest release](https://github.com/maxiking445/MiniDV-Capture/releases/latest)
-and download **one** of the files under **Assets**:
-
-- **AppImage** (Ubuntu, Debian, Fedora, Arch and other Linux distributions):
-  download `MiniDV-Capture-x86_64.AppImage`, then run:
-
-  ```bash
-  chmod +x MiniDV-Capture-x86_64.AppImage
-  ./MiniDV-Capture-x86_64.AppImage
-  ```
-
-- **Debian/Ubuntu**: download the `.deb` file, then install it from its
-  download folder:
-
-  ```bash
-  sudo apt install ./MiniDV-Capture_*_amd64.deb
-  ```
-
-The `.deb` installer also installs required packages such as FFmpeg and dvgrab.
-Both formats include the application and its Python/Qt runtime. On first use,
-open **Setup** in the app to enable FireWire camera access. Alternatively,
-download the source archive from the same release page.
+your tapes with FFmpeg. Original DV recordings are kept by default.
 
 ## Use
 

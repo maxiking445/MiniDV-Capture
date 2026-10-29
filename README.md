@@ -19,7 +19,7 @@
 
 ## Quick start
 
-1. Connect your MiniDV camera to your Linux computer with **FireWire** and
+1. Connect your MiniDV or Digital8 camera to your Linux computer with **FireWire** and
    switch the camera to **PLAYER / VCR** mode.
 2. Open the [latest release](https://github.com/maxiking445/MiniDV-Capture/releases/latest)
    and download **one** of these files from **Assets**:
@@ -43,8 +43,11 @@
 The AppImage can be run directly. The `.deb` installs the app and its required
 packages. Both formats are available from the [latest release page](https://github.com/maxiking445/MiniDV-Capture/releases/latest).
 
-Capture MiniDV tapes over FireWire, preview video while recording, and convert
-your tapes with FFmpeg. Original DV recordings are kept by default.
+Capture MiniDV and Digital8 tapes over FireWire, preview video while recording,
+and convert your tapes with FFmpeg. Digital8 works because the camera sends DV
+video over FireWire. Some Digital8 cameras can also play analog Video8/Hi8 tapes
+and output them as DV; support for those tapes depends on the camera. Original DV
+recordings are kept by default.
 
 ## Use
 

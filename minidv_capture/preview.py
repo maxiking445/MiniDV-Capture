@@ -38,6 +38,13 @@ class LivePreview(QWidget):
         parent = self.parent()
         return parent.tr(text) if parent and hasattr(parent, 'tr') else text
 
+    def retranslate(self):
+        self.status.setText(self.tr_ui('Live preview · muted · up to 5 fps'))
+        if self.session:
+            self.picture.setText(self.tr_ui('Waiting for DV video …'))
+        elif self.pixmap.isNull():
+            self.picture.setText(self.tr_ui('No active capture selected'))
+
     def set_session(self, session):
         if session is self.session:
             return

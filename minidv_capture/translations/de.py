@@ -178,4 +178,39 @@ STRINGS = {
         'Mindestens 2 GiB freier Speicherplatz erforderlich (DV benötigt etwa 13 GB pro Stunde).',
     'Less than 512 MiB free. Capture stopped to protect your data.':
         'Weniger als 512 MiB frei. Die Aufnahme wurde zum Schutz deiner Daten beendet.',
+    ' Open Setup to enable FireWire access.': ' Über „Einrichtung“ den FireWire-Zugriff aktivieren.',
+    'No DV data received. Check PLAYER/VCR mode and PLAY.': 'Keine DV-Daten empfangen. PLAYER/VCR-Modus und PLAY prüfen.',
+    'Camera disconnected. Partial capture is kept.': 'Kamera getrennt. Die Teilaufnahme bleibt erhalten.',
+    'Signal lost: no new DV data for 30 seconds. Check manually whether the tape has ended.':
+        'Signal verloren: Seit 30 Sekunden treffen keine DV-Daten ein. Prüfe, ob das Band zu Ende ist.',
+    'dvgrab is missing. Install it through Setup.': 'dvgrab fehlt. Installiere es über „Einrichtung“.',
+    'Connect only one camera per FireWire bus in manual mode.':
+        'Im manuellen Modus darf nur eine Kamera pro FireWire-Bus angeschlossen sein.',
+    'The original camera is not connected. Connect it over FireWire and rescan.':
+        'Die ursprüngliche Kamera ist nicht verbunden. Per FireWire anschließen und Geräte erneut suchen.',
+    'This tape has no interrupted capture to continue.': 'Für diese Kassette gibt es keine unterbrochene Aufnahme zum Fortsetzen.',
+    'Only interrupted or incomplete captures can be continued.':
+        'Nur unterbrochene oder unvollständige Aufnahmen können fortgesetzt werden.',
+    'No partial DV capture is available to continue.': 'Keine teilweise DV-Aufnahme zum Fortsetzen vorhanden.',
+    'This job cannot be queued again': 'Dieser Auftrag kann nicht erneut eingereiht werden.',
+    'No raw file available': 'Keine Rohdatei verfügbar.',
+    'No valid video output': 'Keine gültige Videoausgabe.',
+    'Output duration does not match the source': 'Die Ausgabedauer stimmt nicht mit der Quelle überein.',
+    'Resolution or aspect ratio changed': 'Auflösung oder Seitenverhältnis wurden verändert.',
+    'Audio streams, channels or sample rate missing/changed': 'Tonspuren, Kanäle oder Abtastrate fehlen oder wurden verändert.',
+    'Raw file is missing or empty': 'Rohdatei fehlt oder ist leer.',
+    'Raw capture contains no valid video': 'Die Rohaufnahme enthält kein gültiges Video.',
+    'Raw file changed during conversion': 'Die Rohdatei wurde während der Konvertierung verändert.',
+    'Output completed; original kept: ': 'Ausgabe abgeschlossen; Original wurde behalten: ',
+    'Cannot read queue: ': 'Warteschlange kann nicht gelesen werden: ',
+    'Invalid queue': 'Ungültige Warteschlange.', 'Invalid job': 'Ungültiger Auftrag.',
+    'Stop or finish this tape before removing it from history.':
+        'Beende diese Kassette, bevor du sie aus dem Verlauf entfernst.',
+    'Original DV capture is missing': 'Die originale DV-Aufnahme fehlt.',
+    'No resumed DV segments were found': 'Keine fortgesetzten DV-Abschnitte gefunden.',
+    'No available tape number': 'Keine freie Kassettennummer verfügbar.',
+    'Yes': 'Ja', 'No': 'Nein',
+    'Unsafe raw file path; original kept': 'Unsicherer Rohdateipfad; Original wurde behalten.',
+    'Verified output missing; original kept': 'Geprüfte Ausgabe fehlt; Original wurde behalten.',
+    'File changed since verification; original kept': 'Datei wurde seit der Prüfung verändert; Original wurde behalten.',
 }

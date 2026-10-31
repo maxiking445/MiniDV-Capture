@@ -260,7 +260,7 @@ class MainWindow(QMainWindow):
         self.captures.failed.connect(self.capture_failed)
         self.queue.changed.connect(self.refresh)
         self.queue.log.connect(self.append_log)
-        self.queue.done.connect(lambda j: self.notify('Conversion complete', j['name']))
+        self.queue.done.connect(lambda j: self.notify(self.tr('Conversion complete'), j['name']))
         self.scan_timer = QTimer(self)
         self.scan_timer.setInterval(2500)
         self.scan_timer.timeout.connect(self.scan)
@@ -356,7 +356,8 @@ class MainWindow(QMainWindow):
         stamp = time.strftime('%H:%M:%S')
         if self.devices:
             accessible = sum(d.accessible for d in self.devices)
-            message = (f'{len(self.devices)} Kamera(s) gefunden; {accessible} zugänglich.' if self.language == 'de'
+            message = ((f'{len(self.devices)} Kamera gefunden' if len(self.devices) == 1 else f'{len(self.devices)} Kameras gefunden')
+                       + f'; {accessible} zugänglich.' if self.language == 'de'
                        else f'{len(self.devices)} camera(s) found; {accessible} accessible.')
             if not accessible:
                 message += self.tr(' Open Setup to enable FireWire access.')
@@ -483,7 +484,8 @@ class MainWindow(QMainWindow):
         self.dependencies.setText(self.tr('Missing components: ') + ', '.join(missing) + self.tr(' · Install missing components in Setup.') if missing else
                                   self.tr('All components ready'))
         d = self.selected_device()
-        self.device_info.setText(f'GUID {d.guid}  ·  {d.node}  ·  Controller {d.card}  ·  '
+        controller = f'FireWire-Controller {d.card}' if d and self.language == 'de' else (f'Controller {d.card}' if d else '')
+        self.device_info.setText(f'GUID {d.guid}  ·  {d.node}  ·  {controller}  ·  '
             + (self.tr('Device access ready') if d.accessible else self.tr('Access denied – open Setup')) if d else
             self.tr('No camera connected. Select PLAYER/VCR mode and connect via FireWire.'))
         session = self.captures.sessions.get(d.guid) if d else None
@@ -518,7 +520,9 @@ class MainWindow(QMainWindow):
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
         else:
-            self.live.setText(self.tr(f'{len(self.captures.active())} capture(s) active') if self.captures.active() else self.tr('Ready'))
+            active_count = len(self.captures.active())
+            self.live.setText((f'{active_count} Aufnahme(n) aktiv' if self.language == 'de' else f'{active_count} capture(s) active')
+                              if active_count else self.tr('Ready'))
         selected = self.selected_job()
         selected_id = selected['id'] if selected else None
         self.table.blockSignals(True)
@@ -564,8 +568,8 @@ class MainWindow(QMainWindow):
                               f'{int(elapsed)//60:02}:{int(elapsed)%60:02} / 90:00 (est.)')
                 else:
                     detail = self.tr('Waiting for PLAY') if session.manual else self.tr('Waiting for DV data / rewinding')
-                return percent, 'Capture ≈', detail
-            return 0, 'Capture ≈', 'Waiting for DV data'
+                return percent, self.tr('Capture ≈'), detail
+            return 0, self.tr('Capture ≈'), self.tr('Waiting for DV data')
         detail = {
             'queued': 'Waiting for conversion', 'converting': 'Converting video',
             'verifying': 'Verifying video and audio', 'done': 'Complete · output verified',
@@ -576,10 +580,11 @@ class MainWindow(QMainWindow):
             detail = {'probe-source': 'Inspecting source video',
                       'probe-result': 'Checking output metadata', 'decode-check': 'Verifying video and audio'
                       }.get(self.queue.phase, detail)
+            detail = self.tr(detail)
             if self.queue.phase == 'encode':
-                detail = f'Converting video · {self.queue.active_encoder}' if self.queue.active_encoder else 'Converting video'
+                detail = f'{self.tr("Converting video")} · {self.queue.active_encoder}' if self.queue.active_encoder else self.tr('Converting video')
         value = 0 if state == 'queued' else min(100, max(0, job.get('progress', 0)))
-        return value, 'Conversion' if state in {'queued', 'converting', 'verifying', 'done', 'conversion_error'} else 'Stopped', job.get('error') or detail
+        return value, self.tr('Conversion') if state in {'queued', 'converting', 'verifying', 'done', 'conversion_error'} else self.tr('Stopped'), self.tr(job.get('error') or detail)
 
     def selected_job(self):
         row = self.table.currentRow()
@@ -779,10 +784,10 @@ class MainWindow(QMainWindow):
             return
         self.logs.clear()
         self.refresh()
-            message = (f'{count} Verlaufseinträge entfernt. Videodateien und wartende Aufträge bleiben erhalten.'
-                       if self.language == 'de' else
-                       f'Cleared {count} history entries. Video files and pending jobs were kept.')
-            self.statusBar().showMessage(message, 10000)
+        message = (f'{count} Verlaufseinträge entfernt. Videodateien und wartende Aufträge bleiben erhalten.'
+                   if self.language == 'de' else
+                   f'Cleared {count} history entries. Video files and pending jobs were kept.')
+        self.statusBar().showMessage(message, 10000)
 
     def setup(self):
         if self.captures.active() or self.queue.job:
@@ -811,11 +816,15 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.captures.active() or self.queue.job:
-            reply = QMessageBox.question(self, self.tr('Tasks running'),
+            dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Tasks running'),
                 self.tr('Cancel active tasks and quit? Partial files will be kept; queued jobs will resume next time.'),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+                QMessageBox.StandardButton.NoButton, self)
+            yes = dialog.addButton(self.tr('Yes'), QMessageBox.ButtonRole.AcceptRole)
+            no = dialog.addButton(self.tr('No'), QMessageBox.ButtonRole.RejectRole)
+            dialog.setDefaultButton(no)
+            dialog.exec()
             event.ignore()
-            if reply == QMessageBox.StandardButton.Yes:
+            if dialog.clickedButton() == yes:
                 self.shutting_down = True
                 for guid in list(self.tape_watchers):
                     self.stop_tape_watcher(guid)

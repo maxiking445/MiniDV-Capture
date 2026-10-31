@@ -74,8 +74,17 @@ class CaptureSession(QObject):
                                  Path(self.job['directory']), self.rewind,
                                  broadcast=broadcast and not self.resume, output_name=self.output_name))
         self.log.emit('dvgrab ' + ' '.join(self.process.arguments()))
+        self._write_log('Starting capture process')
         self.process.start()
         self.timer.start()
+
+    def _write_log(self, message):
+        """Keep lifecycle events beside dvgrab output for diagnosing hangs."""
+        try:
+            with self.logfile.open('a') as f:
+                f.write(f'\n[{time.strftime("%Y-%m-%d %H:%M:%S")}] {message}\n')
+        except OSError as exc:
+            self.log.emit(f'Could not write capture lifecycle log: {exc}')
 
     def read_log(self):
         text = bytes(self.process.readAllStandardError()).decode(errors='replace')
@@ -123,18 +132,22 @@ class CaptureSession(QObject):
         self.reason = reason
         self.job['error'] = error
         self.timer.stop()
+        self._write_log(f'Stopping capture: reason={reason}; {error or "no additional error"}')
+        self.log.emit(f'Stopping capture: {reason}' + (f' ({error})' if error else ''))
         interrupt(self.process)
 
     def process_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
             self.job['error'] = 'Could not start dvgrab: ' + self.process.errorString()
             self.reason = 'error'
+            self._write_log(self.job['error'])
             self.finished(-1, QProcess.ExitStatus.CrashExit)
 
     def finished(self, code, status):
         if self.finished_once:
             return
         self.read_log()
+        self._write_log(f'dvgrab exited: code={code}; status={status}; requested_stop={self.reason or "none"}')
         self.finished_once = True
         self.timer.stop()
         segments = list(Path(self.job['directory']).glob(self.output_name + '*.dv'))

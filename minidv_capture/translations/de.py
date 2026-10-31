@@ -54,6 +54,9 @@ STRINGS = {
     'No DV data arrived. Check camera power, PLAYER/VCR mode and FireWire cable. Run a device check, then retry the capture.':
         'Keine DV-Daten eingetroffen. Stromversorgung, PLAYER/VCR-Modus und FireWire-Kabel prüfen. Geräte prüfen und Aufnahme erneut versuchen.',
     'Capture stopped': 'Aufnahme angehalten',
+    'Automatically increment tape name for the next tape': 'Kassettennamen für die nächste Kassette automatisch erhöhen',
+    'When enabled, Tape8-001 is followed by Tape9-001. When disabled, captures keep the same tape name and folder numbering continues, for example Tape8-002.':
+        'Aktiviert folgt auf Tape8-001 der Name Tape9-001. Deaktiviert bleibt der Kassettenname gleich und die Ordnernummer läuft weiter, zum Beispiel Tape8-002.',
     'Raw footage is kept by default. AVI/DV remuxes without quality loss.\nYou can capture the next tape while conversion runs.':
         'Rohmaterial bleibt standardmäßig erhalten. AVI/DV wird ohne Qualitätsverlust umverpackt.\nWährend der Konvertierung kann die nächste Kassette aufgenommen werden.',
     'Capture request accepted. Waiting for dvgrab to start…': 'Aufnahmeanfrage angenommen. Warte auf den Start von dvgrab …',

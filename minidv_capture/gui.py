@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import re
 import time
 from PySide6.QtCore import Qt, QSettings, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QIcon
@@ -107,6 +108,10 @@ class MainWindow(QMainWindow):
         form.addRow('Output folder', folder_row)
         self.label = QLineEdit(self.settings.value('label', 'Tape'))
         form.addRow('Tape name', self.label)
+        self.auto_tape_name = QCheckBox('Automatically increment tape name for the next tape')
+        self.auto_tape_name.setChecked(self.settings.value('auto_tape_name', True, type=bool))
+        self.auto_tape_name.setToolTip('When enabled, Tape8-001 is followed by Tape9-001. When disabled, captures keep the same tape name and folder numbering continues, for example Tape8-002.')
+        form.addRow(self.auto_tape_name)
         self.mode = QComboBox()
         self.mode.addItems(['Manual · PLAY on camera', 'Automatic · AV/C'])
         self.mode.currentIndexChanged.connect(self.mode_changed)
@@ -285,6 +290,7 @@ class MainWindow(QMainWindow):
                 widget.setText(self.tr(source))
         self.mode.setItemText(0, self.tr('Manual · PLAY on camera'))
         self.mode.setItemText(1, self.tr('Automatic · AV/C'))
+        self.auto_tape_name.setToolTip(self.tr('When enabled, Tape8-001 is followed by Tape9-001. When disabled, captures keep the same tape name and folder numbering continues, for example Tape8-002.'))
         self.table.setHorizontalHeaderLabels([self.tr(x) for x in ('Tape', 'Camera', 'Status', 'Progress', 'Details')])
         self.refresh()
 
@@ -340,7 +346,7 @@ class MainWindow(QMainWindow):
                 'auto_next': self.auto_next.isChecked(),
                 'duration': self.duration.value(), 'format': self.format.currentText(),
                 'quality': self.quality.currentText(), 'deinterlace': self.deinterlace.isChecked(),
-                'delete_raw': self.delete_raw.isChecked(), 'signal_timeout': 30}
+                'delete_raw': self.delete_raw.isChecked(), 'signal_timeout': 60}
 
     def device_changed(self):
         if self.previous_guid:
@@ -647,6 +653,9 @@ class MainWindow(QMainWindow):
             if button == next_button:
                 device = next((d for d in discover() if d.guid == job['device']['guid']), None)
                 if device:
+                    next_label = self.next_tape_label(job) if self.auto_tape_name.isChecked() else ''
+                    if next_label:
+                        self.label.setText(next_label)
                     if job['options'].get('auto_next'):
                         preferences = self.options() if self.selected_device() and self.selected_device().guid == guid else self.device_options.get(guid, job['options'])
                         self.start_capture(device=device, options_override=dict(job['options'], manual=False,
@@ -667,6 +676,26 @@ class MainWindow(QMainWindow):
             watcher.message.connect(dialog.setInformativeText)
             watcher.ready.connect(next_button.click)
             watcher.start()
+
+    def next_tape_label(self, previous_job):
+        """Increment a numbered tape label after that tape has actual capture data."""
+        raw = Path(previous_job.get('raw', ''))
+        has_capture = False
+        try:
+            has_capture = raw.is_file() and raw.stat().st_size > 0
+        except OSError:
+            pass
+        has_capture = has_capture or previous_job.get('state') in {'converting', 'verifying', 'done'}
+        if not has_capture:
+            return ''
+
+        # Store names look like Tape8-001; remove only the per-folder sequence.
+        base = re.sub(r'-\d{3,}$', '', previous_job.get('name', ''))
+        match = re.fullmatch(r'(.*?)(\d+)', base)
+        if not match:
+            return ''
+        prefix, number = match.groups()
+        return f'{prefix}{int(number) + 1:0{len(number)}d}'
 
     def capture_failed(self, job):
         self.notify('Capture stopped', job['error'])
@@ -728,7 +757,8 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         if self.previous_guid:
             self.device_options[self.previous_guid] = self.options()
-        for key, value in {'folder': self.folder.text(), 'label': self.label.text(), 'format': self.format.currentText(),
+        for key, value in {'folder': self.folder.text(), 'label': self.label.text(),
+                           'auto_tape_name': self.auto_tape_name.isChecked(), 'format': self.format.currentText(),
                            'quality': self.quality.currentText(), 'deinterlace': self.deinterlace.isChecked(),
                            'guid': self.device_combo.currentData() or '', 'geometry': self.saveGeometry(),
                            'device_options': json.dumps(self.device_options)}.items():

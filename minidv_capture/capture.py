@@ -126,8 +126,8 @@ class CaptureSession(QObject):
                 self.stop('error', 'Less than 512 MiB free. Capture stopped to protect your data.')
             elif not self.bytes and now - self.started > (900 if self.job['options'].get('rewind') else 180):
                 self.stop('error', 'No DV data received. Check PLAYER/VCR mode and PLAY.')
-            elif self.bytes and now - self.last_data > self.job['options'].get('signal_timeout', 30):
-                self.stop('error', 'Signal lost: no new DV data for 30 seconds. Check manually whether the tape has ended.')
+            elif self.bytes and now - self.last_data >= self.job['options'].get('signal_timeout', 60):
+                self.stop('complete', 'No DV data for 60 seconds; treating this as tape end and starting conversion.')
             elif self.first_data is not None and self.job['options'].get('duration', 0) and now - self.first_data >= self.job['options']['duration'] * 60:
                 self.stop('complete')
         except OSError as exc:

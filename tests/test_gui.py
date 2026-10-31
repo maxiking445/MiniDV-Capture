@@ -43,6 +43,26 @@ class GuiTests(unittest.TestCase):
         self.assertIn(DEVICE.guid, self.window.device_info.text())
         self.assertFalse(self.window.auto_next.isChecked())
 
+    def test_wizard_allows_direct_navigation_and_preserves_settings(self):
+        self.assertEqual(self.window.pages.currentIndex(), 0)
+        self.assertFalse(self.window.start_button.isVisible())
+        QTest.mouseClick(self.window.step_buttons[1], Qt.MouseButton.LeftButton)
+        self.window.label.setText('Holiday')
+        QTest.mouseClick(self.window.next_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(self.window.pages.currentIndex(), 2)
+        QTest.mouseClick(self.window.step_buttons[3], Qt.MouseButton.LeftButton)
+        self.assertTrue(self.window.start_button.isVisible())
+        self.assertFalse(self.window.folder.isVisible())
+        self.assertFalse(self.window.capture_details.isVisible())
+        self.assertTrue(self.window.live_lamp.isVisible())
+        self.assertFalse(self.window.live_blink_timer.isActive())
+        QTest.mouseClick(self.window.details_button, Qt.MouseButton.LeftButton)
+        self.assertTrue(self.window.table.isVisible())
+        QTest.mouseClick(self.window.step_buttons[1], Qt.MouseButton.LeftButton)
+        self.assertEqual(self.window.label.text(), 'Holiday')
+        QTest.mouseClick(self.window.back_button, Qt.MouseButton.LeftButton)
+        self.assertEqual(self.window.pages.currentIndex(), 0)
+
     def test_german_language_translates_tape_name_and_default_value(self):
         self.window.language_combo.setCurrentIndex(self.window.language_combo.findData('de'))
         self.assertEqual(self.window.label.text(), 'Kassette')
@@ -212,6 +232,7 @@ class GuiTests(unittest.TestCase):
             session.process_started_ok = True
             self.window.refresh()
             self.assertIn('Waiting for DV data', self.window.live.text())
+            self.assertFalse(self.window.live_blink_timer.isActive())
             self.assertIs(self.window.preview.session, session)
             self.assertNotIn('Waiting for PLAY', self.window.live.text())
             Path(job['raw']).write_bytes(b'DV' * 72000)
@@ -220,11 +241,16 @@ class GuiTests(unittest.TestCase):
             self.window.refresh()
             self.assertIn('Capturing', self.window.live.text())
             self.assertGreater(session.rate, 0)
+            self.assertTrue(self.window.live_blink_timer.isActive())
+            QTest.mouseClick(self.window.step_buttons[2], Qt.MouseButton.LeftButton)
+            self.assertTrue(session.active)
+            self.assertTrue(self.window.live_blink_timer.isActive())
         finally:
             session.finished_once = True
 
         self.window.refresh()
         self.assertIsNone(self.window.preview.session)
+        self.assertFalse(self.window.live_blink_timer.isActive())
 
     def test_tape_dialog_starts_next_without_waiting_for_queue(self):
         job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())

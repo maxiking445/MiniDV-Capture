@@ -7,7 +7,8 @@ from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QFileDialog, QCheckBox, QSpinBox, QGroupBox,
     QFormLayout, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
-    QMessageBox, QSystemTrayIcon, QSplitter, QAbstractItemView, QMenu, QStyle)
+    QMessageBox, QSystemTrayIcon, QSplitter, QAbstractItemView, QMenu, QStyle,
+    QStackedWidget, QScrollArea, QButtonGroup)
 from .devices import discover
 from .capture import CaptureManager
 from .conversion import ConversionQueue, FORMATS, QUALITIES
@@ -77,7 +78,23 @@ class MainWindow(QMainWindow):
         layout.addLayout(top)
         self.dependencies = QLabel()
         self.dependencies.setWordWrap(True)
-        layout.addWidget(self.dependencies)
+        steps = QHBoxLayout()
+        self.step_buttons = []
+        self.step_group = QButtonGroup(self)
+        self.step_group.setExclusive(True)
+        for index in range(4):
+            button = QPushButton()
+            button.setCheckable(True)
+            button.setMinimumHeight(48)
+            button.setStyleSheet('QPushButton {padding:10px;font-weight:600;border-radius:8px;}'
+                                'QPushButton:checked {background:#3478c7;color:white;}')
+            self.step_group.addButton(button, index)
+            self.step_buttons.append(button)
+            steps.addWidget(button, 1)
+        layout.addLayout(steps)
+        self.pages = QStackedWidget()
+        self.step_group.idClicked.connect(self.set_step)
+        layout.addWidget(self.pages, 1)
         device_box = QGroupBox()
         device_layout = QVBoxLayout(device_box)
         self.camera_step_title = self.make_step_header(device_layout, '1', 'Camera', '#3478c7')
@@ -99,8 +116,8 @@ class MainWindow(QMainWindow):
         self.scan_result = QLabel()
         self.scan_result.setWordWrap(True)
         device_layout.addWidget(self.scan_result)
-        layout.addWidget(device_box)
-        settings_row = QHBoxLayout()
+        device_layout.addWidget(self.dependencies)
+        self.add_settings_page(device_box)
         capture_box = QGroupBox()
         form = QFormLayout(capture_box)
         self.capture_step_title = self.make_step_header(form, '2', 'Capture', '#c27a23')
@@ -138,7 +155,7 @@ class MainWindow(QMainWindow):
         self.auto_next.setToolTip('Uses AV/C cassette detection and automatic playback. Falls back to Start next tape if unsupported.')
         self.auto_next.toggled.connect(self.auto_next_changed)
         form.addRow(self.auto_next)
-        settings_row.addWidget(capture_box, 1)
+        self.add_settings_page(capture_box)
         convert_box = QGroupBox()
         convert_form = QFormLayout(convert_box)
         self.conversion_step_title = self.make_step_header(convert_form, '3', 'Background conversion', '#327e58')
@@ -163,18 +180,16 @@ class MainWindow(QMainWindow):
                       'You can capture the next tape while conversion runs.')
         note.setWordWrap(True)
         convert_form.addRow(note)
-        settings_row.addWidget(convert_box, 1)
-        layout.addLayout(settings_row)
+        self.add_settings_page(convert_box)
         self.format_changed()
         current_capture = QGroupBox('Current capture')
         current_capture.setObjectName('currentCapture')
         current_capture.setStyleSheet('QGroupBox#currentCapture {border:2px solid #a8323e;border-radius:8px;margin-top:10px;padding:10px;}')
         capture_layout = QVBoxLayout(current_capture)
         capture_header = QHBoxLayout()
-        self.live_lamp = QLabel('● LIVE')
+        self.live_lamp = QLabel('● REC')
         self.live_lamp.setObjectName('liveLamp')
         self.live_lamp.setStyleSheet('QLabel#liveLamp {color:white;background:#d92736;border-radius:8px;padding:5px 10px;font-weight:800;}')
-        self.live_lamp.hide()
         capture_header.addWidget(self.live_lamp)
         self.live = QLabel('Ready')
         self.live.setStyleSheet('font-size:16px;font-weight:600;padding:4px;')
@@ -183,7 +198,6 @@ class MainWindow(QMainWindow):
         self.start_button.setObjectName('captureAction')
         self.start_button.setMinimumHeight(44)
         self.start_button.clicked.connect(self.capture_action)
-        capture_header.addWidget(self.start_button)
         capture_layout.addLayout(capture_header)
         feedback = QHBoxLayout()
         self.capture_feedback = QLabel()
@@ -199,7 +213,7 @@ class MainWindow(QMainWindow):
         self.capture_feedback.hide()
         self.check_devices_button.hide()
         self.retry_capture_button.hide()
-        layout.addWidget(current_capture)
+        self.pages.addWidget(current_capture)
         self.live_blink_on = True
         self.live_blink_timer = QTimer(self)
         self.live_blink_timer.setInterval(500)
@@ -222,15 +236,22 @@ class MainWindow(QMainWindow):
         self.logs.setMaximumBlockCount(1500)
         split.addWidget(self.logs)
         split.setSizes([240, 100])
-        monitor_row = QSplitter(Qt.Orientation.Horizontal)
         preview_box = QGroupBox('Live preview')
         preview_layout = QVBoxLayout(preview_box)
         self.preview = LivePreview(self)
         preview_layout.addWidget(self.preview)
-        monitor_row.addWidget(preview_box)
-        monitor_row.addWidget(split)
-        monitor_row.setSizes([480, 620])
-        layout.addWidget(monitor_row, 1)
+        capture_layout.addWidget(preview_box, 1)
+        self.details_button = QPushButton('Show jobs and log')
+        self.details_button.setCheckable(True)
+        capture_layout.addWidget(self.details_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.capture_details = QWidget()
+        details_layout = QVBoxLayout(self.capture_details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.addWidget(split)
+        self.details_button.toggled.connect(self.capture_details.setVisible)
+        self.capture_details.hide()
+        capture_layout.addWidget(self.capture_details)
+
         bottom = QHBoxLayout()
         bottom.addStretch()
         self.pause_button = QPushButton('Pause queue')
@@ -256,9 +277,26 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.cancel_all_button)
         self.version_label = QLabel(f'Version {__version__}')
         self.version_label.setToolTip('MiniDV Capture application version')
-        bottom.insertWidget(0, self.version_label)
-        bottom.insertStretch(1, 1)
-        layout.addLayout(bottom)
+        details_layout.addLayout(bottom)
+        action_row = QHBoxLayout()
+        action_row.addStretch()
+        self.start_button.setMinimumWidth(240)
+        action_row.addWidget(self.start_button)
+        action_row.addStretch()
+        capture_layout.addLayout(action_row)
+        navigation = QHBoxLayout()
+        self.back_button = QPushButton('Back')
+        self.back_button.clicked.connect(lambda: self.set_step(self.pages.currentIndex() - 1))
+        navigation.addWidget(self.back_button)
+        navigation.addStretch()
+        navigation.addWidget(self.version_label)
+        navigation.addStretch()
+        self.next_button = QPushButton('Next')
+        self.next_button.clicked.connect(lambda: self.set_step(self.pages.currentIndex() + 1))
+        navigation.addWidget(self.next_button)
+        layout.addLayout(navigation)
+        self.set_step(3 if self.settings.value('wizard_completed', False, type=bool) else 0)
+
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         self.tray.setToolTip('MiniDV Capture')
         self.tray_menu = QMenu(self)
@@ -288,6 +326,28 @@ class MainWindow(QMainWindow):
         if geometry:
             self.restoreGeometry(geometry)
         self.retranslate_ui()
+
+    def add_settings_page(self, box):
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.addWidget(box)
+        page_layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(page)
+        self.pages.addWidget(scroll)
+
+    def set_step(self, index):
+        index = max(0, min(index, self.pages.count() - 1))
+        self.pages.setCurrentIndex(index)
+        self.step_buttons[index].setChecked(True)
+        self.back_button.setEnabled(index > 0)
+        self.next_button.setVisible(index < self.pages.count() - 1)
+        if index == 3:
+            # Once configured, always open the recording screen on future launches.
+            self.settings.setValue('wizard_completed', True)
 
     def tr(self, text):
         strings = LANGUAGES.get(self.language, LANGUAGES['en'])['strings']
@@ -353,6 +413,8 @@ class MainWindow(QMainWindow):
         self.camera_step_title.setText(self.tr('Camera'))
         self.capture_step_title.setText(self.tr('Capture'))
         self.conversion_step_title.setText(self.tr('Background conversion'))
+        for index, title in enumerate(('Camera', 'Capture settings', 'Conversion', 'Record')):
+            self.step_buttons[index].setText(f'{index + 1}. {self.tr(title)}')
         self.preview.retranslate()
         self.refresh()
 
@@ -487,6 +549,7 @@ class MainWindow(QMainWindow):
                 if guid == device.guid or (peer and peer.bus == device.bus):
                     self.stop_tape_watcher(guid)
             self.captures.start(device, Path(self.folder.text()), self.label.text(), options)
+            self.set_step(3)
             self.retry_capture = (device, dict(options))
             self.capture_feedback.setText(self.tr('Capture request accepted. Waiting for dvgrab to start…'))
             self.capture_feedback.show()
@@ -579,7 +642,7 @@ class MainWindow(QMainWindow):
                 suffix = ' · ' + self.tr('Capturing · DV data arriving')
             self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
                               f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s{suffix}')
-            if session.bytes:
+            if session.bytes and not stopping:
                 self.live_lamp.show()
                 if not self.live_blink_timer.isActive():
                     self.live_blink_on = True
@@ -589,25 +652,25 @@ class MainWindow(QMainWindow):
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
             elif session.process_started_ok:
-                self.live_lamp.hide()
                 self.live_blink_timer.stop()
                 self.capture_feedback.setText(self.tr('dvgrab is running. No DV data has arrived yet. In Manual mode, press PLAY on the camera; otherwise check camera mode and connection.'))
                 self.capture_feedback.show()
                 self.check_devices_button.show()
                 self.retry_capture_button.hide()
             else:
-                self.live_lamp.hide()
                 self.live_blink_timer.stop()
                 self.capture_feedback.setText(self.tr('Starting dvgrab…'))
                 self.capture_feedback.show()
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
         else:
-            self.live_lamp.hide()
             self.live_blink_timer.stop()
             active_count = len(self.captures.active())
             self.live.setText((f'{active_count} Aufnahme(n) aktiv' if self.language == 'de' else f'{active_count} capture(s) active')
                               if active_count else self.tr('Ready'))
+        if not self.live_blink_timer.isActive():
+            self.live_blink_on = False
+            self.live_lamp.setStyleSheet('QLabel#liveLamp {color:#b95760;background:transparent;border-radius:8px;padding:5px 10px;font-weight:800;}')
         selected = self.selected_job()
         selected_id = selected['id'] if selected else None
         self.table.blockSignals(True)

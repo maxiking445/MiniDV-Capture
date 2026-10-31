@@ -43,6 +43,11 @@ class GuiTests(unittest.TestCase):
         self.assertIn(DEVICE.guid, self.window.device_info.text())
         self.assertFalse(self.window.auto_next.isChecked())
 
+    def test_german_language_translates_tape_name_and_default_value(self):
+        self.window.language_combo.setCurrentIndex(self.window.language_combo.findData('de'))
+        self.assertEqual(self.window.label.text(), 'Kassette')
+        self.assertIn('Kassettenname', [label.text() for label in self.window.findChildren(type(self.window.device_info))])
+
     def test_auto_next_tape_after_confirmed_change_and_close_disarms(self):
         self.window.auto_next.setChecked(True)
         self.assertFalse(self.window.options()['manual'])
@@ -64,6 +69,47 @@ class GuiTests(unittest.TestCase):
             self.window.tape_complete(job)
         self.window.dialogs[0].close()
         self.assertFalse(self.window.tape_watchers)
+
+    def test_auto_tape_name_advances_when_history_has_capture_data(self):
+        self.window.auto_tape_name.setChecked(True)
+        self.window.label.setText('Kassette8')
+        job = self.store.create(self.root / 'tapes', 'Kassette8', DEVICE.to_dict(), options())
+        with Path(job['raw']).open('wb') as raw:
+            raw.truncate(1_200_000_000)
+        with patch('minidv_capture.gui.available', return_value=True), patch.object(self.window.captures, 'start') as start:
+            self.window.start_capture(device=DEVICE)
+        self.assertEqual(self.window.label.text(), 'Kassette9')
+        self.assertEqual(start.call_args.args[2], 'Kassette9')
+
+    def test_auto_tape_name_can_be_disabled_to_continue_folder_sequence(self):
+        self.window.auto_tape_name.setChecked(False)
+        self.window.label.setText('Kassette8')
+        job = self.store.create(self.root / 'tapes', 'Kassette8', DEVICE.to_dict(), options())
+        Path(job['raw']).write_bytes(b'DV data')
+        with patch('minidv_capture.gui.available', return_value=True), patch.object(self.window.captures, 'start') as start:
+            self.window.start_capture(device=DEVICE)
+        self.assertEqual(self.window.label.text(), 'Kassette8')
+        self.assertEqual(start.call_args.args[2], 'Kassette8')
+
+    def test_empty_history_entry_does_not_advance_auto_tape_name(self):
+        self.window.auto_tape_name.setChecked(True)
+        self.window.label.setText('Kassette8')
+        self.store.create(self.root / 'tapes', 'Kassette8', DEVICE.to_dict(), options())
+        with patch('minidv_capture.gui.available', return_value=True), patch.object(self.window.captures, 'start') as start:
+            self.window.start_capture(device=DEVICE)
+        self.assertEqual(self.window.label.text(), 'Kassette8')
+        self.assertEqual(start.call_args.args[2], 'Kassette8')
+
+    def test_short_capture_is_treated_as_recapture_not_new_tape(self):
+        self.window.auto_tape_name.setChecked(True)
+        self.window.label.setText('Kassette8')
+        job = self.store.create(self.root / 'tapes', 'Kassette8', DEVICE.to_dict(), options())
+        Path(job['raw']).write_bytes(b'DV data from a short capture')
+        self.store.update(job, state='done', bytes=500_000_000)
+        with patch('minidv_capture.gui.available', return_value=True), patch.object(self.window.captures, 'start') as start:
+            self.window.start_capture(device=DEVICE)
+        self.assertEqual(self.window.label.text(), 'Kassette8')
+        self.assertEqual(start.call_args.args[2], 'Kassette8')
 
     def test_clear_history_preserves_videos_and_pending_jobs(self):
         completed = self.store.create(self.root / 'tapes', 'Finished', DEVICE.to_dict(), options())
@@ -163,6 +209,7 @@ class GuiTests(unittest.TestCase):
         session = CaptureSession(self.store, job, DEVICE, self.window.captures)
         self.window.captures.sessions[DEVICE.guid] = session
         try:
+            session.process_started_ok = True
             self.window.refresh()
             self.assertIn('Waiting for DV data', self.window.live.text())
             self.assertIs(self.window.preview.session, session)

@@ -22,6 +22,7 @@ from .translations import LANGUAGES
 STATES = {'capturing': 'Capturing', 'queued': 'Queued', 'converting': 'Converting',
           'verifying': 'Verifying output', 'done': 'Done', 'error': 'Capture error',
           'cancelled': 'Cancelled', 'interrupted': 'Interrupted', 'conversion_error': 'Conversion error'}
+MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE = 1_100_000_000  # About five minutes of DV video.
 
 
 
@@ -106,7 +107,9 @@ class MainWindow(QMainWindow):
         browse.clicked.connect(self.browse)
         folder_row.addWidget(browse)
         form.addRow('Output folder', folder_row)
-        self.label = QLineEdit(self.settings.value('label', 'Tape'))
+        self.label = QLineEdit(self.settings.value('label', self.tr('Tape')))
+        if self.label.text() == 'Tape' and self.language == 'de':
+            self.label.setText(self.tr('Tape'))
         form.addRow('Tape name', self.label)
         self.auto_tape_name = QCheckBox('Automatically increment tape name for the next tape')
         self.auto_tape_name.setChecked(self.settings.value('auto_tape_name', True, type=bool))
@@ -275,8 +278,11 @@ class MainWindow(QMainWindow):
         return LANGUAGES.get(self.language, LANGUAGES['en'])['strings'].get(text, text)
 
     def change_language(self, _index):
+        previous_default = self.tr('Tape')
         self.language = self.language_combo.currentData()
         self.settings.setValue('language', self.language)
+        if self.label.text() == previous_default:
+            self.label.setText(self.tr('Tape'))
         self.retranslate_ui()
 
     def retranslate_ui(self):
@@ -411,6 +417,16 @@ class MainWindow(QMainWindow):
             return
         try:
             options = options_override if options_override is not None else (self.options() if device.guid == self.device_combo.currentData() else self.device_options.get(device.guid, self.options()))
+            active_on_bus = any(s.active and s.device.bus == device.bus for s in self.captures.sessions.values())
+            if self.auto_tape_name.isChecked() and not active_on_bus:
+                matching = [j for j in self.store.jobs
+                            if re.fullmatch(re.escape(self.label.text()) + r'-\d{3,}', j.get('name', ''))
+                            and self.has_capture_data(j)]
+                if matching:
+                    latest = max(matching, key=lambda j: j.get('created', 0))
+                    incremented = self.next_tape_label(latest)
+                    if incremented:
+                        self.label.setText(incremented)
             for guid, watcher in list(self.tape_watchers.items()):
                 # Cancel pending auto-starts before taking control of this bus.
                 peer = next((d for d in self.devices if d.guid == guid), None)
@@ -467,7 +483,7 @@ class MainWindow(QMainWindow):
                       ' · ' + self.tr('Waiting for DV data (may be rewinding)')
                       if session.job['options'].get('rewind') else ' · ' + self.tr('Waiting for DV data'))
             if session.bytes:
-                suffix = ' · ' + self.tr('DV data arriving; capturing')
+                suffix = ' · ' + self.tr('Capturing · DV data arriving')
             self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
                               f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s{suffix}')
             if session.bytes:
@@ -682,14 +698,7 @@ class MainWindow(QMainWindow):
 
     def next_tape_label(self, previous_job):
         """Increment a numbered tape label after that tape has actual capture data."""
-        raw = Path(previous_job.get('raw', ''))
-        has_capture = False
-        try:
-            has_capture = raw.is_file() and raw.stat().st_size > 0
-        except OSError:
-            pass
-        has_capture = has_capture or previous_job.get('state') in {'converting', 'verifying', 'done'}
-        if not has_capture:
+        if not self.has_capture_data(previous_job):
             return ''
 
         # Store names look like Tape8-001; remove only the per-folder sequence.
@@ -699,6 +708,17 @@ class MainWindow(QMainWindow):
             return ''
         prefix, number = match.groups()
         return f'{prefix}{int(number) + 1:0{len(number)}d}'
+
+    @staticmethod
+    def has_capture_data(job):
+        raw = Path(job.get('raw', ''))
+        size = job.get('bytes', 0) or 0
+        try:
+            if raw.is_file():
+                size = max(size, raw.stat().st_size)
+        except OSError:
+            pass
+        return size >= MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE
 
     def capture_failed(self, job):
         self.notify('Capture stopped', job['error'])

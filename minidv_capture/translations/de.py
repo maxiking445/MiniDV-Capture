@@ -66,6 +66,7 @@ STRINGS = {
     'Waiting for DV data (may be rewinding)': 'Warte auf DV-Daten (eventuell wird zurückgespult)',
     'Waiting for DV data': 'Warte auf DV-Daten',
     'DV data arriving; capturing': 'DV-Daten treffen ein; Aufnahme läuft',
+    'Capturing · DV data arriving': 'Aufnahme läuft · DV-Daten treffen ein',
     'Stopping capture…': 'Aufnahme wird beendet …',
     'Capture estimate based on 90 minutes. This does not detect the end of the tape.':
         'Aufnahmeschätzung auf Basis von 90 Minuten. Das Kassettenende wird nicht erkannt.',

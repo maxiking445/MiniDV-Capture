@@ -750,6 +750,12 @@ class MainWindow(QMainWindow):
                     self.append_log(str(exc))
 
     def tape_complete(self, job):
+        # A capture can finish normally after shutdown has already been requested
+        # (for example, signal-loss was detected just before the user chose Quit).
+        # Do not open a tape dialog or start the next tape during application exit.
+        if self.shutting_down:
+            self.stop_tape_watcher(job['device']['guid'])
+            return
         self.queue.pump()
         self.notify(self.tr('Tape complete'), job['name'] + self.tr(' – insert the next tape'))
         dialog = QMessageBox(self)
@@ -913,6 +919,8 @@ class MainWindow(QMainWindow):
                 self.shutting_down = True
                 for guid in list(self.tape_watchers):
                     self.stop_tape_watcher(guid)
+                for dialog in list(self.dialogs):
+                    dialog.close()
                 self.queue.cancel()
                 for session in self.captures.active():
                     session.stop('cancel')

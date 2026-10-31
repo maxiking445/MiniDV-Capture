@@ -34,6 +34,7 @@ class MainWindow(QMainWindow):
         self.devices = []
         self.dialogs = []
         self.tape_watchers = {}
+        self.retry_capture = None
         self.shutting_down = False
         try:
             self.device_options = json.loads(self.settings.value('device_options', '{}'))
@@ -209,6 +210,20 @@ class MainWindow(QMainWindow):
         bottom.insertStretch(1, 1)
         layout.addLayout(bottom)
         layout.addLayout(buttons)
+        feedback = QHBoxLayout()
+        self.capture_feedback = QLabel()
+        self.capture_feedback.setWordWrap(True)
+        feedback.addWidget(self.capture_feedback, 1)
+        self.check_devices_button = QPushButton('Check devices')
+        self.check_devices_button.clicked.connect(self.rescan_devices)
+        feedback.addWidget(self.check_devices_button)
+        self.retry_capture_button = QPushButton('Retry capture')
+        self.retry_capture_button.clicked.connect(self.retry_capture_start)
+        feedback.addWidget(self.retry_capture_button)
+        layout.addLayout(feedback)
+        self.capture_feedback.hide()
+        self.check_devices_button.hide()
+        self.retry_capture_button.hide()
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         self.tray.setToolTip('MiniDV Capture')
         self.tray_menu = QMenu(self)
@@ -358,6 +373,11 @@ class MainWindow(QMainWindow):
                 if guid == device.guid or (peer and peer.bus == device.bus):
                     self.stop_tape_watcher(guid)
             self.captures.start(device, Path(self.folder.text()), self.label.text(), options)
+            self.retry_capture = (device, dict(options))
+            self.capture_feedback.setText('Capture request accepted. Waiting for dvgrab to start…')
+            self.capture_feedback.show()
+            self.check_devices_button.hide()
+            self.retry_capture_button.hide()
             self.save_settings()
         except (OSError, ValueError, RuntimeError) as exc:
             self.error(str(exc))
@@ -369,6 +389,18 @@ class MainWindow(QMainWindow):
             return
         session.stop('cancel' if cancelled else 'complete')
         self.refresh()
+
+    def retry_capture_start(self):
+        if not self.retry_capture:
+            return
+        device, options = self.retry_capture
+        self.rescan_devices()
+        fresh = next((d for d in self.devices if d.guid == device.guid), None)
+        if not fresh:
+            self.capture_feedback.setText('Camera not found. Check power, PLAYER/VCR mode and FireWire cable, then check devices and retry.')
+            return
+        self.capture_feedback.hide()
+        self.start_capture(device=fresh, options_override=options)
 
     def refresh(self):
         missing = [x for x in ('dvgrab', 'ffmpeg', 'ffprobe') if not available(x)]
@@ -388,10 +420,26 @@ class MainWindow(QMainWindow):
             seconds = int(time.monotonic() - session.started)
             self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
                               f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s'
-                              + ((' · Waiting for PLAY' if session.job['options']['manual'] else
+                              + ((' · dvgrab started; waiting for PLAY' if session.job['options']['manual'] and session.process_started_ok else
+                                  ' · Starting dvgrab' if not session.process_started_ok else
                                   ' · Waiting for DV data (may be rewinding)'
                                   if session.job['options'].get('rewind') else ' · Waiting for DV data')
-                                 if not session.bytes else ' · Capturing'))
+                                 if not session.bytes else ' · DV data arriving; capturing'))
+            if session.bytes:
+                self.capture_feedback.setText('DV data is arriving and the recording file is growing.')
+                self.capture_feedback.show()
+                self.check_devices_button.hide()
+                self.retry_capture_button.hide()
+            elif session.process_started_ok:
+                self.capture_feedback.setText('dvgrab is running. No DV data has arrived yet. In Manual mode, press PLAY on the camera; otherwise check camera mode and connection.')
+                self.capture_feedback.show()
+                self.check_devices_button.show()
+                self.retry_capture_button.hide()
+            else:
+                self.capture_feedback.setText('Starting dvgrab…')
+                self.capture_feedback.show()
+                self.check_devices_button.hide()
+                self.retry_capture_button.hide()
         else:
             self.live.setText(f'{len(self.captures.active())} capture(s) active' if self.captures.active() else 'Ready')
         selected = self.selected_job()
@@ -586,6 +634,14 @@ class MainWindow(QMainWindow):
     def capture_failed(self, job):
         self.notify('Capture stopped', job['error'])
         self.append_log(job['name'] + ': ' + job['error'])
+        if 'No DV data received' in job.get('error', ''):
+            device = next((d for d in self.devices if d.guid == job['device']['guid']), None)
+            if device:
+                self.retry_capture = (device, dict(job['options']))
+            self.capture_feedback.setText('No DV data arrived. Check camera power, PLAYER/VCR mode and FireWire cable. Run a device check, then retry the capture.')
+            self.capture_feedback.show()
+            self.check_devices_button.show()
+            self.retry_capture_button.setVisible(device is not None)
         self.error(job['error'])
 
     def notify(self, title, text):

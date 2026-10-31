@@ -47,6 +47,7 @@ class CaptureSession(QObject):
         self.process.setProcessEnvironment(env)
         self.process.setStandardOutputFile(QProcess.nullDevice())
         self.process.readyReadStandardError.connect(self.read_log)
+        self.process.started.connect(self.process_started)
         self.process.finished.connect(self.finished)
         self.process.errorOccurred.connect(self.process_error)
         self.timer = QTimer(self)
@@ -61,6 +62,7 @@ class CaptureSession(QObject):
         self.damaged = False
         self.log_tail = ''
         self.logfile = Path(job['directory']) / 'capture.log'
+        self.process_started_ok = False
 
     @property
     def active(self):
@@ -77,6 +79,12 @@ class CaptureSession(QObject):
         self._write_log('Starting capture process')
         self.process.start()
         self.timer.start()
+
+    def process_started(self):
+        self.process_started_ok = True
+        self._write_log('dvgrab process started successfully')
+        self.log.emit('dvgrab started; waiting for DV data')
+        self.changed.emit()
 
     def _write_log(self, message):
         """Keep lifecycle events beside dvgrab output for diagnosing hangs."""

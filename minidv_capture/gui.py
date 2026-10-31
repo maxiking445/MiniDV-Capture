@@ -16,10 +16,12 @@ from .preferences import english_options
 from .tape_change import TapeChangeWatcher
 from . import __version__
 from .setup import SetupDialog, project_root
+from .translations import LANGUAGES
 
 STATES = {'capturing': 'Capturing', 'queued': 'Queued', 'converting': 'Converting',
           'verifying': 'Verifying output', 'done': 'Done', 'error': 'Capture error',
           'cancelled': 'Cancelled', 'interrupted': 'Interrupted', 'conversion_error': 'Conversion error'}
+
 
 
 class MainWindow(QMainWindow):
@@ -45,6 +47,9 @@ class MainWindow(QMainWindow):
         except (TypeError, ValueError):
             self.device_options = {}
         self.previous_guid = ''
+        self.language = self.settings.value('language', 'en')
+        if self.language not in LANGUAGES:
+            self.language = 'en'
         self.setWindowTitle('MiniDV Capture')
         self.setWindowIcon(QIcon(str(project_root() / 'assets/minidv-capture.svg')))
         self.resize(1160, 830)
@@ -60,6 +65,13 @@ class MainWindow(QMainWindow):
         setup = QPushButton('Setup')
         setup.clicked.connect(self.setup)
         top.addWidget(setup)
+        self.language_combo = QComboBox()
+        for code, language in LANGUAGES.items():
+            self.language_combo.addItem(f"{language['flag']}  {language['name']}", code)
+        self.language_combo.setCurrentIndex(self.language_combo.findData(self.language))
+        self.language_combo.setToolTip('Sprache / Language')
+        self.language_combo.currentIndexChanged.connect(self.change_language)
+        top.addWidget(self.language_combo)
         layout.addLayout(top)
         self.dependencies = QLabel()
         self.dependencies.setWordWrap(True)
@@ -252,6 +264,29 @@ class MainWindow(QMainWindow):
         geometry = self.settings.value('geometry')
         if geometry:
             self.restoreGeometry(geometry)
+        self.retranslate_ui()
+
+    def tr(self, text):
+        return LANGUAGES.get(self.language, LANGUAGES['en'])['strings'].get(text, text)
+
+    def change_language(self, _index):
+        self.language = self.language_combo.currentData()
+        self.settings.setValue('language', self.language)
+        self.retranslate_ui()
+
+    def retranslate_ui(self):
+        # Translate static controls in place; combo data and saved job values stay canonical.
+        for kind in (QLabel, QPushButton, QGroupBox, QCheckBox):
+            for widget in self.findChildren(kind):
+                source = widget.property('source_text')
+                if source is None:
+                    source = widget.text()
+                    widget.setProperty('source_text', source)
+                widget.setText(self.tr(source))
+        self.mode.setItemText(0, self.tr('Manual · PLAY on camera'))
+        self.mode.setItemText(1, self.tr('Automatic · AV/C'))
+        self.table.setHorizontalHeaderLabels([self.tr(x) for x in ('Tape', 'Camera', 'Status', 'Progress', 'Details')])
+        self.refresh()
 
     def show_window(self):
         self.showNormal()
@@ -329,8 +364,8 @@ class MainWindow(QMainWindow):
         if manual and hasattr(self, 'auto_next'):
             self.auto_next.setChecked(False)
         self.rewind.setEnabled(not manual)
-        self.mode_hint.setText('Select PLAYER/VCR mode. Start capture here, then press PLAY on the camera.' if manual else
-                              'Select PLAYER/VCR mode on the camera. The app starts playback automatically.')
+        self.mode_hint.setText(self.tr('Select PLAYER/VCR mode. Start capture here, then press PLAY on the camera.') if manual else
+                              self.tr('Select PLAYER/VCR mode on the camera. The app starts playback automatically.'))
 
     def auto_next_changed(self, checked):
         if checked:
@@ -374,7 +409,7 @@ class MainWindow(QMainWindow):
                     self.stop_tape_watcher(guid)
             self.captures.start(device, Path(self.folder.text()), self.label.text(), options)
             self.retry_capture = (device, dict(options))
-            self.capture_feedback.setText('Capture request accepted. Waiting for dvgrab to start…')
+            self.capture_feedback.setText(self.tr('Capture request accepted. Waiting for dvgrab to start…'))
             self.capture_feedback.show()
             self.check_devices_button.hide()
             self.retry_capture_button.hide()
@@ -397,19 +432,19 @@ class MainWindow(QMainWindow):
         self.rescan_devices()
         fresh = next((d for d in self.devices if d.guid == device.guid), None)
         if not fresh:
-            self.capture_feedback.setText('Camera not found. Check power, PLAYER/VCR mode and FireWire cable, then check devices and retry.')
+            self.capture_feedback.setText(self.tr('Camera not found. Check power, PLAYER/VCR mode and FireWire cable, then check devices and retry.'))
             return
         self.capture_feedback.hide()
         self.start_capture(device=fresh, options_override=options)
 
     def refresh(self):
         missing = [x for x in ('dvgrab', 'ffmpeg', 'ffprobe') if not available(x)]
-        self.dependencies.setText('Missing components: ' + ', '.join(missing) + ' · Install missing components in Setup.' if missing else
-                                  'All components ready')
+        self.dependencies.setText(self.tr('Missing components: ') + ', '.join(missing) + self.tr(' · Install missing components in Setup.') if missing else
+                                  self.tr('All components ready'))
         d = self.selected_device()
         self.device_info.setText(f'GUID {d.guid}  ·  {d.node}  ·  Controller {d.card}  ·  '
-            + ('Device access ready' if d.accessible else 'Access denied – open Setup') if d else
-            'No camera connected. Select PLAYER/VCR mode and connect via FireWire.')
+            + (self.tr('Device access ready') if d.accessible else self.tr('Access denied – open Setup')) if d else
+            self.tr('No camera connected. Select PLAYER/VCR mode and connect via FireWire.'))
         session = self.captures.sessions.get(d.guid) if d else None
         active = bool(session and session.active)
         self.preview.set_session(session if active and not session.reason else None)
@@ -418,30 +453,31 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(active and not session.reason)
         if active:
             seconds = int(time.monotonic() - session.started)
-            self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
-                              f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s'
-                              + ((' · dvgrab started; waiting for PLAY' if session.job['options']['manual'] and session.process_started_ok else
-                                  ' · Starting dvgrab' if not session.process_started_ok else
-                                  ' · Waiting for DV data (may be rewinding)'
-                                  if session.job['options'].get('rewind') else ' · Waiting for DV data')
-                                 if not session.bytes else ' · DV data arriving; capturing'))
+            suffix = (' · ' + self.tr('dvgrab started; waiting for PLAY') if session.job['options']['manual'] and session.process_started_ok else
+                      ' · ' + self.tr('Starting dvgrab…') if not session.process_started_ok else
+                      ' · ' + self.tr('Waiting for DV data (may be rewinding)')
+                      if session.job['options'].get('rewind') else ' · ' + self.tr('Waiting for DV data'))
             if session.bytes:
-                self.capture_feedback.setText('DV data is arriving and the recording file is growing.')
+                suffix = ' · ' + self.tr('DV data arriving; capturing')
+            self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
+                              f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s{suffix}')
+            if session.bytes:
+                self.capture_feedback.setText(self.tr('DV data is arriving and the recording file is growing.'))
                 self.capture_feedback.show()
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
             elif session.process_started_ok:
-                self.capture_feedback.setText('dvgrab is running. No DV data has arrived yet. In Manual mode, press PLAY on the camera; otherwise check camera mode and connection.')
+                self.capture_feedback.setText(self.tr('dvgrab is running. No DV data has arrived yet. In Manual mode, press PLAY on the camera; otherwise check camera mode and connection.'))
                 self.capture_feedback.show()
                 self.check_devices_button.show()
                 self.retry_capture_button.hide()
             else:
-                self.capture_feedback.setText('Starting dvgrab…')
+                self.capture_feedback.setText(self.tr('Starting dvgrab…'))
                 self.capture_feedback.show()
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
         else:
-            self.live.setText(f'{len(self.captures.active())} capture(s) active' if self.captures.active() else 'Ready')
+            self.live.setText(self.tr(f'{len(self.captures.active())} capture(s) active') if self.captures.active() else self.tr('Ready'))
         selected = self.selected_job()
         selected_id = selected['id'] if selected else None
         self.table.blockSignals(True)
@@ -450,7 +486,7 @@ class MainWindow(QMainWindow):
         for row, j in enumerate(jobs):
             progress, progress_label, detail = self.job_progress(j)
             values = [j['name'], j['device']['name'] + ' · ' + j['device']['guid'][-6:],
-                      STATES.get(j['state'], j['state']), '', detail]
+                      self.tr(STATES.get(j['state'], j['state'])), '', detail]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setToolTip(value)
@@ -466,12 +502,12 @@ class MainWindow(QMainWindow):
             bar.setRange(0, 100)
             bar.setValue(progress)
             bar.setFormat(progress_label + ' %p%')
-            bar.setToolTip('Capture estimate based on 90 minutes. This does not detect the end of the tape.'
-                           if j['state'] == 'capturing' else 'Conversion includes output verification.')
+            bar.setToolTip(self.tr('Capture estimate based on 90 minutes. This does not detect the end of the tape.')
+                           if j['state'] == 'capturing' else self.tr('Conversion includes output verification.'))
             if j['id'] == selected_id:
                 self.table.selectRow(row)
         self.table.blockSignals(False)
-        self.pause_button.setText('Resume queue' if self.queue.paused else 'Pause queue')
+        self.pause_button.setText(self.tr('Resume queue' if self.queue.paused else 'Pause queue'))
 
     def job_progress(self, job):
         state = job['state']
@@ -481,12 +517,12 @@ class MainWindow(QMainWindow):
                 elapsed = max(0, time.monotonic() - session.first_data) if session.first_data is not None else 0
                 percent = min(99, int(elapsed / (90 * 60) * 100))
                 if session.reason:
-                    detail = 'Stopping capture…'
+                    detail = self.tr('Stopping capture…')
                 elif session.bytes:
-                    detail = (f'Capturing · {session.rate / 1e6:.1f} MB/s\n{session.bytes / 1e9:.2f} GB · '
+                    detail = (f'{self.tr("Capturing")} · {session.rate / 1e6:.1f} MB/s\n{session.bytes / 1e9:.2f} GB · '
                               f'{int(elapsed)//60:02}:{int(elapsed)%60:02} / 90:00 (est.)')
                 else:
-                    detail = 'Waiting for PLAY' if session.manual else 'Waiting for DV data / rewinding'
+                    detail = self.tr('Waiting for PLAY') if session.manual else self.tr('Waiting for DV data / rewinding')
                 return percent, 'Capture ≈', detail
             return 0, 'Capture ≈', 'Waiting for DV data'
         detail = {
@@ -494,6 +530,7 @@ class MainWindow(QMainWindow):
             'verifying': 'Verifying video and audio', 'done': 'Complete · output verified',
             'cancelled': 'Cancelled · raw footage kept', 'interrupted': 'Interrupted · raw footage kept',
         }.get(state, 'Stopped')
+        detail = self.tr(detail)
         if self.queue.job is job:
             detail = {'probe-source': 'Inspecting source video',
                       'probe-result': 'Checking output metadata', 'decode-check': 'Verifying video and audio'

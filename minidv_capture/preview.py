@@ -15,13 +15,13 @@ class LivePreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        self.picture = QLabel('Preview starts with capture')
+        self.picture = QLabel(self.tr_ui('Preview starts with capture'))
         self.picture.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.picture.setMinimumSize(240, 135)
         self.picture.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         self.picture.setStyleSheet('background: #090c10; color: #aab5c4;')
         layout.addWidget(self.picture, 1)
-        self.status = QLabel('Live preview · muted · up to 5 fps')
+        self.status = QLabel(self.tr_ui('Live preview · muted · up to 5 fps'))
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
         self.session = None
@@ -34,13 +34,17 @@ class LivePreview(QWidget):
         self.timer.setInterval(200)
         self.timer.timeout.connect(self.poll)
 
+    def tr_ui(self, text):
+        parent = self.parent()
+        return parent.tr(text) if parent and hasattr(parent, 'tr') else text
+
     def set_session(self, session):
         if session is self.session:
             return
         self.stop()
         self.session = session
-        self.picture.setText('Waiting for DV video …' if session else 'No active capture selected')
-        self.status.setText('Live preview · muted · up to 5 fps')
+        self.picture.setText(self.tr_ui('Waiting for DV video …') if session else self.tr_ui('No active capture selected'))
+        self.status.setText(self.tr_ui('Live preview · muted · up to 5 fps'))
         if session:
             self.timer.start()
 
@@ -63,7 +67,7 @@ class LivePreview(QWidget):
     def decoder_failed(self, process):
         if self.decoder is process:
             self.timer.stop()
-            self.status.setText('Preview unavailable. Capture continues independently.')
+            self.status.setText(self.tr_ui('Preview unavailable. Capture continues independently.'))
 
     def poll(self):
         if not self.session or not self.session.active or self.session.reason:
@@ -85,7 +89,7 @@ class LivePreview(QWidget):
                 offset = (count - 1) * frame_size
                 if offset == self.offset:
                     if self.last_frame and time.monotonic() - self.last_frame > 2:
-                        self.status.setText('No new DV video · showing last frame')
+                        self.status.setText(self.tr_ui('No new DV video · showing last frame'))
                     return
                 if self.decoder is None:
                     self.start_decoder()
@@ -101,7 +105,7 @@ class LivePreview(QWidget):
             self.decoder.write(frame)
             self.offset = offset
         except OSError:
-            self.status.setText('Waiting for readable DV data …')
+            self.status.setText(self.tr_ui('Waiting for readable DV data …'))
 
     def read_image(self):
         self.buffer.extend(bytes(self.decoder.readAllStandardOutput()))
@@ -114,7 +118,7 @@ class LivePreview(QWidget):
         image = QImage(pixels, self.WIDTH, self.HEIGHT, self.WIDTH * 3, QImage.Format.Format_RGB888).copy()
         self.pixmap = QPixmap.fromImage(image)
         self.last_frame = time.monotonic()
-        self.status.setText('Live preview · muted · up to 5 fps')
+        self.status.setText(self.tr_ui('Live preview · muted · up to 5 fps'))
         self.show_image()
 
     def show_image(self):

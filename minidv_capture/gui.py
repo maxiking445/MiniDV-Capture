@@ -247,9 +247,9 @@ class MainWindow(QMainWindow):
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         self.tray.setToolTip('MiniDV Capture')
         self.tray_menu = QMenu(self)
-        self.tray_menu.addAction('Open', self.show_window)
+        self.open_action = self.tray_menu.addAction('Open', self.show_window)
         self.tray_menu.addSeparator()
-        self.tray_menu.addAction('Quit', self.close)
+        self.quit_action = self.tray_menu.addAction('Quit', self.close)
         self.tray.setContextMenu(self.tray_menu)
         self.tray.activated.connect(self.tray_activated)
         if QSystemTrayIcon.isSystemTrayAvailable():
@@ -275,7 +275,13 @@ class MainWindow(QMainWindow):
         self.retranslate_ui()
 
     def tr(self, text):
-        return LANGUAGES.get(self.language, LANGUAGES['en'])['strings'].get(text, text)
+        strings = LANGUAGES.get(self.language, LANGUAGES['en'])['strings']
+        if text in strings:
+            return strings[text]
+        for source in sorted(strings, key=len, reverse=True):
+            if source and text.startswith(source):
+                return strings[source] + text[len(source):]
+        return text
 
     def change_language(self, _index):
         previous_default = self.tr('Tape')
@@ -300,7 +306,17 @@ class MainWindow(QMainWindow):
         self.mode.setItemText(0, self.tr('Manual · PLAY on camera'))
         self.mode.setItemText(1, self.tr('Automatic · AV/C'))
         self.auto_tape_name.setToolTip(self.tr('When enabled, Tape8-001 is followed by Tape9-001. When disabled, captures keep the same tape name and folder numbering continues, for example Tape8-002.'))
+        self.rescan_button.setToolTip(self.tr('Rescan FireWire devices and access permissions, including after a disconnect.'))
+        self.auto_next.setToolTip(self.tr('Uses AV/C cassette detection and automatic playback. Falls back to Start next tape if unsupported.'))
+        self.delete_raw.setToolTip(self.tr('Only after duration, audio, video and full decoding checks. Originals are kept if any check fails.'))
+        self.stop_button.setToolTip(self.tr('Finish capture, convert the footage and offer to start the next tape.'))
+        self.cancel_button.setToolTip(self.tr('Stop capture and keep the raw file without converting it.'))
+        self.clear_history_button.setToolTip(self.tr('Remove finished and failed jobs from the list. Keep video files and active or queued jobs.'))
+        self.version_label.setToolTip(self.tr('MiniDV Capture application version'))
+        self.open_action.setText(self.tr('Open'))
+        self.quit_action.setText(self.tr('Quit'))
         self.table.setHorizontalHeaderLabels([self.tr(x) for x in ('Tape', 'Camera', 'Status', 'Progress', 'Details')])
+        self.preview.retranslate()
         self.refresh()
 
     def show_window(self):
@@ -340,13 +356,13 @@ class MainWindow(QMainWindow):
         stamp = time.strftime('%H:%M:%S')
         if self.devices:
             accessible = sum(d.accessible for d in self.devices)
-            message = f'{len(self.devices)} camera(s) found; {accessible} accessible.'
+            message = (f'{len(self.devices)} Kamera(s) gefunden; {accessible} zugänglich.' if self.language == 'de'
+                       else f'{len(self.devices)} camera(s) found; {accessible} accessible.')
             if not accessible:
-                message += ' Open Setup to enable FireWire access.'
+                message += self.tr(' Open Setup to enable FireWire access.')
         else:
-            message = ('No camera found on the FireWire bus. Check PLAYER/VCR mode and connection; '
-                       'if needed, power-cycle the camera and scan again.')
-        self.scan_result.setText(f'Scan at {stamp}: {message}')
+            message = self.tr('No camera found on the FireWire bus. Check PLAYER/VCR mode and connection; if needed, power-cycle the camera and scan again.')
+        self.scan_result.setText(f'{self.tr("Scan at ")}{stamp}: {message}')
         self.statusBar().showMessage(message, 15000)
         self.append_log(f'Camera scan {stamp}: {message}')
 
@@ -394,7 +410,7 @@ class MainWindow(QMainWindow):
         watcher = self.tape_watchers.pop(guid, None)
         if watcher:
             watcher.stop()
-            watcher.message.emit('Automatic start is off. Use Start next tape to continue.')
+            watcher.message.emit(self.tr('Automatic start is off. Use Start next tape to continue.'))
             watcher.deleteLater()
 
     def format_changed(self, *_):
@@ -403,7 +419,7 @@ class MainWindow(QMainWindow):
         self.deinterlace.setEnabled(enabled)
 
     def browse(self):
-        directory = QFileDialog.getExistingDirectory(self, 'Output folder', self.folder.text())
+        directory = QFileDialog.getExistingDirectory(self, self.tr('Output folder'), self.folder.text())
         if directory:
             self.folder.setText(directory)
 
@@ -579,18 +595,18 @@ class MainWindow(QMainWindow):
         if not job:
             return
         menu = QMenu(self)
-        retry = menu.addAction('Retry conversion')
+        retry = menu.addAction(self.tr('Retry conversion'))
         retry_states = {'error', 'cancelled', 'interrupted', 'conversion_error'}
         raw = Path(job['raw'])
         retry.setEnabled(job['state'] in retry_states and raw.is_file() and raw.stat().st_size > 0)
         retry.triggered.connect(lambda _checked=False, target=job: self.retry_job(target))
-        resume = menu.addAction('Resume capture')
+        resume = menu.addAction(self.tr('Resume capture'))
         resume.setEnabled(job.get('capture_incomplete', False)
                           and job['state'] in {'error', 'cancelled', 'interrupted'})
         resume.triggered.connect(lambda _checked=False, target=job: self.resume_capture(target))
         menu.addSeparator()
-        remove = menu.addAction('Remove')
-        remove.setToolTip('Remove this entry from history; keep all video and log files.')
+        remove = menu.addAction(self.tr('Remove'))
+        remove.setToolTip(self.tr('Remove this entry from history. Keep all video and log files.'))
         remove.setEnabled(job['state'] not in {'capturing', 'queued', 'converting', 'verifying'})
         remove.triggered.connect(lambda _checked=False, target=job: self.remove_history_job(target))
         menu.exec(self.table.viewport().mapToGlobal(position))
@@ -602,13 +618,11 @@ class MainWindow(QMainWindow):
             self.error(str(exc))
 
     def resume_capture(self, job):
-        dialog = QMessageBox(QMessageBox.Icon.Question, 'Resume capture',
-            'Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. '
-            'Capture will start without rewinding; press PLAY on the camera when the app is waiting. '
-            'The new DV segment will be appended to the existing tape capture when you stop it.',
+        dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Resume capture'),
+            self.tr('Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.'),
             QMessageBox.StandardButton.NoButton, self)
-        start = dialog.addButton('Start capture', QMessageBox.ButtonRole.AcceptRole)
-        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        start = dialog.addButton(self.tr('Start capture'), QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(self.tr('Cancel'), QMessageBox.ButtonRole.RejectRole)
         dialog.exec()
         if dialog.clickedButton() != start:
             return
@@ -627,7 +641,7 @@ class MainWindow(QMainWindow):
             if self.selected_job() is None:
                 self.logs.clear()
             self.refresh()
-            self.statusBar().showMessage('Removed from history. Video and log files were kept.', 10000)
+            self.statusBar().showMessage(self.tr('Removed from history. Video and log files were kept.'), 10000)
 
     def show_job_log(self):
         job = self.selected_job()
@@ -647,14 +661,14 @@ class MainWindow(QMainWindow):
 
     def tape_complete(self, job):
         self.queue.pump()
-        self.notify('Tape complete', job['name'] + ' – insert the next tape')
+        self.notify(self.tr('Tape complete'), job['name'] + self.tr(' – insert the next tape'))
         dialog = QMessageBox(self)
-        dialog.setWindowTitle('Tape complete')
-        dialog.setText(f'{job["name"]}: Tape complete – insert the next tape.\n'
-                       'Conversion continues independently in the background.')
-        next_button = dialog.addButton('Start next tape', QMessageBox.ButtonRole.AcceptRole)
-        dialog.addButton('Close', QMessageBox.ButtonRole.RejectRole)
-        dialog.setInformativeText('This closes the tape series. Conversions continue in the background.')
+        dialog.setWindowTitle(self.tr('Tape complete'))
+        dialog.setText(f'{job["name"]}: {self.tr("Tape complete – insert the next tape.")}\n'
+                       + self.tr('Conversion continues independently in the background.'))
+        next_button = dialog.addButton(self.tr('Start next tape'), QMessageBox.ButtonRole.AcceptRole)
+        dialog.addButton(self.tr('Close'), QMessageBox.ButtonRole.RejectRole)
+        dialog.setInformativeText(self.tr('This closes the tape series. Conversions continue in the background.'))
         guid = job['device']['guid']
         self.stop_tape_watcher(guid)
         handled = False
@@ -682,7 +696,7 @@ class MainWindow(QMainWindow):
                     else:
                         self.start_capture(device=device)
                 else:
-                    self.error('Camera disconnected.')
+                    self.error(self.tr('Camera disconnected.'))
             cleanup()
         dialog.buttonClicked.connect(chosen)
         dialog.finished.connect(lambda _: cleanup())
@@ -692,7 +706,7 @@ class MainWindow(QMainWindow):
         if job['options'].get('auto_next'):
             watcher = TapeChangeWatcher(guid, dialog)
             self.tape_watchers[guid] = watcher
-            watcher.message.connect(dialog.setInformativeText)
+            watcher.message.connect(lambda text: dialog.setInformativeText(self.tr(text)))
             watcher.ready.connect(next_button.click)
             watcher.start()
 
@@ -727,13 +741,14 @@ class MainWindow(QMainWindow):
             device = next((d for d in self.devices if d.guid == job['device']['guid']), None)
             if device:
                 self.retry_capture = (device, dict(job['options']))
-            self.capture_feedback.setText('No DV data arrived. Check camera power, PLAYER/VCR mode and FireWire cable. Run a device check, then retry the capture.')
+            self.capture_feedback.setText(self.tr('No DV data arrived. Check camera power, PLAYER/VCR mode and FireWire cable. Run a device check, then retry the capture.'))
             self.capture_feedback.show()
             self.check_devices_button.show()
             self.retry_capture_button.setVisible(device is not None)
         self.error(job['error'])
 
     def notify(self, title, text):
+        title, text = self.tr(title), self.tr(text)
         if self.tray.isVisible():
             self.tray.showMessage(title, text, QSystemTrayIcon.MessageIcon.Information, 8000)
         self.statusBar().showMessage(title + ': ' + text, 15000)
@@ -743,7 +758,7 @@ class MainWindow(QMainWindow):
         self.queue.pump()
         self.refresh()
         if self.queue.paused:
-            self.statusBar().showMessage('The current conversion will finish; queued jobs will wait.')
+            self.statusBar().showMessage(self.tr('The current conversion will finish; queued jobs will wait.'))
 
     def retry(self):
         job = self.selected_job()
@@ -764,18 +779,21 @@ class MainWindow(QMainWindow):
             return
         self.logs.clear()
         self.refresh()
-        self.statusBar().showMessage(f'Cleared {count} history entries. Video files and pending jobs were kept.', 10000)
+            message = (f'{count} Verlaufseinträge entfernt. Videodateien und wartende Aufträge bleiben erhalten.'
+                       if self.language == 'de' else
+                       f'Cleared {count} history entries. Video files and pending jobs were kept.')
+            self.statusBar().showMessage(message, 10000)
 
     def setup(self):
         if self.captures.active() or self.queue.job:
-            self.error('Wait for active captures and conversions to finish before running setup.')
+            self.error(self.tr('Wait for active captures and conversions to finish before running setup.'))
             return
         SetupDialog(self).exec()
         self.scan()
         self.queue.pump()
 
     def error(self, text):
-        QMessageBox.warning(self, 'MiniDV Capture', text)
+        QMessageBox.warning(self, self.tr('MiniDV Capture'), self.tr(text))
 
     def save_settings(self):
         if self.previous_guid:
@@ -793,9 +811,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.captures.active() or self.queue.job:
-            reply = QMessageBox.question(self, 'Tasks running',
-                'Cancel active tasks and quit? Partial files will be kept; '
-                'queued jobs will resume next time.',
+            reply = QMessageBox.question(self, self.tr('Tasks running'),
+                self.tr('Cancel active tasks and quit? Partial files will be kept; queued jobs will resume next time.'),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
             event.ignore()
             if reply == QMessageBox.StandardButton.Yes:

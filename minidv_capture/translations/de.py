@@ -72,4 +72,110 @@ STRINGS = {
         'Aufnahmeschätzung auf Basis von 90 Minuten. Das Kassettenende wird nicht erkannt.',
     'Conversion includes output verification.': 'Die Konvertierung umfasst eine Prüfung der Ausgabe.',
     'Waiting for conversion': 'Wartet auf Konvertierung',
+    'Rescan FireWire devices and access permissions, including after a disconnect.':
+        'FireWire-Geräte und Zugriffsrechte erneut suchen, auch nach einer Verbindungsunterbrechung.',
+    'Uses AV/C cassette detection and automatic playback. Falls back to Start next tape if unsupported.':
+        'Nutzt die AV/C-Kassettenerkennung und automatische Wiedergabe. Falls nicht unterstützt, kann „Nächste Kassette starten“ verwendet werden.',
+    'Only after duration, audio, video and full decoding checks. Originals are kept if any check fails.':
+        'Nur nach Prüfung von Dauer, Ton, Bild und vollständiger Dekodierung. Bei einem Fehler bleibt das Original erhalten.',
+    'Finish capture, convert the footage and offer to start the next tape.':
+        'Aufnahme beenden, Material konvertieren und anbieten, die nächste Kassette zu starten.',
+    'Stop capture and keep the raw file without converting it.':
+        'Aufnahme beenden und Rohdatei ohne Konvertierung behalten.',
+    'Remove finished and failed jobs from the list. Keep video files and active or queued jobs.':
+        'Abgeschlossene und fehlgeschlagene Aufträge aus der Liste entfernen. Videodateien sowie aktive und wartende Aufträge bleiben erhalten.',
+    'Remove this entry from history. Keep all video and log files.':
+        'Diesen Eintrag aus dem Verlauf entfernen. Video- und Protokolldateien bleiben erhalten.',
+    'MiniDV Capture application version': 'Version der MiniDV-Capture-Anwendung',
+    'Open': 'Öffnen', 'Quit': 'Beenden', 'Conversion complete': 'Konvertierung abgeschlossen',
+    'No FireWire camera found. Check PLAYER/VCR mode, power and cable.':
+        'Keine FireWire-Kamera gefunden. PLAYER/VCR-Modus, Stromversorgung und Kabel prüfen.',
+    'No camera found on the FireWire bus. Check PLAYER/VCR mode and connection; if needed, power-cycle the camera and scan again.':
+        'Keine Kamera am FireWire-Bus gefunden. PLAYER/VCR-Modus und Verbindung prüfen; falls nötig Kamera aus- und wieder einschalten und erneut suchen.',
+    'Open Setup to enable FireWire access.': 'Über „Einrichtung“ den FireWire-Zugriff aktivieren.',
+    'camera(s) found; ': 'Kamera(s) gefunden; ', ' accessible.': ' zugänglich.',
+    'Scan at ': 'Suche um ',
+    'Automatic start is off. Use Start next tape to continue.':
+        'Automatischer Start ist aus. Zum Fortfahren „Nächste Kassette starten“ wählen.',
+    'Inspecting source video': 'Quellvideo wird untersucht',
+    'Checking output metadata': 'Ausgabedaten werden geprüft',
+    'Retry conversion': 'Konvertierung erneut versuchen', 'Resume capture': 'Aufnahme fortsetzen',
+    'Remove': 'Entfernen', 'Start next tape': 'Nächste Kassette starten', 'Close': 'Schließen',
+    'Cancel': 'Abbrechen', 'Tape complete': 'Kassette fertig',
+    'Conversion continues independently in the background.': 'Die Konvertierung läuft unabhängig im Hintergrund weiter.',
+    'This closes the tape series. Conversions continue in the background.':
+        'Damit wird diese Kassettenserie beendet. Konvertierungen laufen im Hintergrund weiter.',
+    'Camera disconnected.': 'Kamera getrennt.',
+    'The current conversion will finish; queued jobs will wait.':
+        'Die laufende Konvertierung wird beendet; wartende Aufträge bleiben in der Warteschlange.',
+    'Removed from history. Video and log files were kept.': 'Aus dem Verlauf entfernt. Video- und Protokolldateien bleiben erhalten.',
+    'Cleared ': 'Verlauf geleert: ', ' history entries. Video files and pending jobs were kept.':
+        ' Einträge entfernt. Videodateien und wartende Aufträge bleiben erhalten.',
+    'Wait for active captures and conversions to finish before running setup.':
+        'Warte mit der Einrichtung, bis laufende Aufnahmen und Konvertierungen beendet sind.',
+    'Tasks running': 'Aufträge laufen',
+    'Cancel active tasks and quit? Partial files will be kept; queued jobs will resume next time.':
+        'Laufende Aufträge abbrechen und beenden? Teilaufnahmen bleiben erhalten; wartende Aufträge werden beim nächsten Start fortgesetzt.',
+    'Preview starts with capture': 'Vorschau startet mit der Aufnahme',
+    'No active capture selected': 'Keine aktive Aufnahme ausgewählt',
+    'Live preview · muted · up to 5 fps': 'Live-Vorschau · ohne Ton · bis zu 5 Bilder/s',
+    'Waiting for DV video …': 'Warte auf DV-Video …',
+    'Preview unavailable. Capture continues independently.': 'Vorschau nicht verfügbar. Die Aufnahme läuft weiter.',
+    'No new DV video · showing last frame': 'Kein neues DV-Video · letztes Bild wird angezeigt',
+    'Waiting for readable DV data …': 'Warte auf lesbare DV-Daten …',
+    'Install && set up': 'Installieren && einrichten',
+    'Install missing components and enable FireWire access. Administrator authorization is required.':
+        'Fehlende Komponenten installieren und FireWire-Zugriff aktivieren. Dafür ist eine Administratorfreigabe erforderlich.',
+    'Installing…': 'Installation läuft …',
+    'Setup complete. Rescan the camera.': 'Einrichtung abgeschlossen. Kamera erneut suchen.',
+    'Setup did not complete. Check the details above and retry.':
+        'Einrichtung nicht abgeschlossen. Details oben prüfen und erneut versuchen.',
+    'Could not start administrator authorization: ': 'Administratorfreigabe konnte nicht gestartet werden: ',
+    'MiniDV Capture · Setup': 'MiniDV Capture · Einrichtung',
+    'ready': 'bereit', 'missing': 'fehlt',
+    'Setup supports Ubuntu/Debian (APT), Arch/CachyOS (pacman), and Fedora (DNF). You will be asked for administrator authorization. A udev rule enables FireWire access for the active local desktop session. The application itself runs without administrator privileges.':
+        'Die Einrichtung unterstützt Ubuntu/Debian (APT), Arch/CachyOS (pacman) und Fedora (DNF). Du wirst um eine Administratorfreigabe gebeten. Eine udev-Regel aktiviert den FireWire-Zugriff für die aktive lokale Sitzung. Die Anwendung selbst läuft ohne Administratorrechte.',
+    'Automatic tape detection is unavailable. Use Start next tape after changing the cassette.':
+        'Automatische Kassettenerkennung ist nicht verfügbar. Nach dem Wechsel „Nächste Kassette starten“ wählen.',
+    'Cassette removed. Insert the next tape; capture will start automatically.':
+        'Kassette ausgeworfen. Nächste Kassette einlegen; die Aufnahme startet automatisch.',
+    'Automatic mode: remove this cassette, then insert the next tape.':
+        'Automatikmodus: Kassette auswerfen und anschließend die nächste einlegen.',
+    'Waiting for a reliable cassette status. You can also use Start next tape.':
+        'Warte auf eine zuverlässige Kassettenmeldung. Du kannst auch „Nächste Kassette starten“ wählen.',
+    'Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.':
+        'Spule die Kamera an die Stelle, an der die Aufnahme endete. Die App kann nicht exakt zu dieser Stelle suchen. Die Aufnahme startet ohne Zurückspulen; drücke PLAY an der Kamera, sobald die App wartet. Beim Beenden wird der neue DV-Abschnitt an die vorhandene Aufnahme angehängt.',
+    ' – insert the next tape': ' – nächste Kassette einlegen',
+    'Tape complete – insert the next tape.': 'Kassette fertig – nächste Kassette einlegen.',
+    'No DV data received. Check PLAYER/VCR mode and PLAY.': 'Keine DV-Daten empfangen. PLAYER/VCR-Modus und PLAY prüfen.',
+    'Signal lost: no new DV data for 30 seconds. Check manually whether the tape has ended.':
+        'Signal verloren: Seit 30 Sekunden treffen keine DV-Daten ein. Prüfe, ob das Band zu Ende ist.',
+    'No DV data for 60 seconds; treating this as tape end and starting conversion.':
+        'Seit 60 Sekunden keine DV-Daten; das Bandende wird angenommen und die Konvertierung gestartet.',
+    'Camera disconnected. Partial capture is kept.': 'Kamera getrennt. Die Teilaufnahme bleibt erhalten.',
+    'Less than 512 MiB free. Capture stopped to protect your data.':
+        'Weniger als 512 MiB frei. Die Aufnahme wurde zum Schutz deiner Daten beendet.',
+    'Could not start dvgrab: ': 'dvgrab konnte nicht gestartet werden: ',
+    'Capture was interrupted. Raw files are kept; resume capture or retry conversion.':
+        'Aufnahme wurde unterbrochen. Rohdateien bleiben erhalten; Aufnahme fortsetzen oder Konvertierung wiederholen.',
+    'Interrupted captures found. Raw files were kept.': 'Unterbrochene Aufnahmen gefunden. Rohdateien wurden behalten.',
+    'Capture error': 'Aufnahmefehler', 'Cancelled; raw footage kept.': 'Abgebrochen; Rohmaterial wurde behalten.',
+    'Incomplete capture or damaged/dropped frames. Check the raw footage and capture.log.':
+        'Aufnahme unvollständig oder beschädigte/fehlende Bilder. Rohmaterial und capture.log prüfen.',
+    'Capture estimate based on 90 minutes. This does not detect the end of the tape.':
+        'Aufnahmeschätzung auf Basis von 90 Minuten. Das Kassettenende wird nicht erkannt.',
+    'Capture ≈': 'Aufnahme ≈', 'Conversion': 'Konvertierung',
+    'Waiting for DV data': 'Warte auf DV-Daten', 'No new DV data': 'Keine neuen DV-Daten',
+    'No FireWire camera found. Check PLAYER/VCR mode, power and cable.':
+        'Keine FireWire-Kamera gefunden. PLAYER/VCR-Modus, Stromversorgung und Kabel prüfen.',
+    'A capture is already running on this FireWire bus. Parallel capture requires separate controllers.':
+        'An diesem FireWire-Bus läuft bereits eine Aufnahme. Parallele Aufnahmen benötigen getrennte Controller.',
+    'A capture is already running on this FireWire bus.': 'An diesem FireWire-Bus läuft bereits eine Aufnahme.',
+    'Camera disconnected.': 'Kamera getrennt.',
+    'No read/write access to ': 'Kein Lese-/Schreibzugriff auf ',
+    'FireWire controller not mapped. Rescan devices.': 'FireWire-Controller nicht zugeordnet. Geräte erneut suchen.',
+    'At least 2 GiB of free space is required (DV uses about 13 GB/hour).':
+        'Mindestens 2 GiB freier Speicherplatz erforderlich (DV benötigt etwa 13 GB pro Stunde).',
+    'Less than 512 MiB free. Capture stopped to protect your data.':
+        'Weniger als 512 MiB frei. Die Aufnahme wurde zum Schutz deiner Daten beendet.',
 }

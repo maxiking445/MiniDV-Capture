@@ -78,14 +78,17 @@ class MainWindow(QMainWindow):
         self.dependencies = QLabel()
         self.dependencies.setWordWrap(True)
         layout.addWidget(self.dependencies)
-        device_box = QGroupBox('1 · Camera')
+        device_box = QGroupBox()
         device_layout = QVBoxLayout(device_box)
+        self.camera_step_title = self.make_step_header(device_layout, '1', 'Camera', '#3478c7')
         row = QHBoxLayout()
         self.device_combo = QComboBox()
         self.device_combo.setMinimumWidth(420)
         self.device_combo.currentIndexChanged.connect(self.device_changed)
         row.addWidget(self.device_combo, 1)
-        self.rescan_button = QPushButton('↻  Rescan cameras')
+        self.rescan_button = QPushButton('↻')
+        self.rescan_button.setFixedSize(44, 40)
+        self.rescan_button.setStyleSheet('QPushButton {font-size:28px;font-weight:600;padding:0;}')
         self.rescan_button.setToolTip('Rescan FireWire devices and access permissions, including after a disconnect.')
         self.rescan_button.clicked.connect(self.rescan_devices)
         row.addWidget(self.rescan_button)
@@ -98,8 +101,9 @@ class MainWindow(QMainWindow):
         device_layout.addWidget(self.scan_result)
         layout.addWidget(device_box)
         settings_row = QHBoxLayout()
-        capture_box = QGroupBox('2 · Capture')
+        capture_box = QGroupBox()
         form = QFormLayout(capture_box)
+        self.capture_step_title = self.make_step_header(form, '2', 'Capture', '#c27a23')
         self.folder = QLineEdit(self.settings.value('folder', str(Path.home() / 'Videos' / 'MiniDV')))
         folder_row = QHBoxLayout()
         folder_row.addWidget(self.folder)
@@ -135,8 +139,9 @@ class MainWindow(QMainWindow):
         self.auto_next.toggled.connect(self.auto_next_changed)
         form.addRow(self.auto_next)
         settings_row.addWidget(capture_box, 1)
-        convert_box = QGroupBox('3 · Background conversion')
+        convert_box = QGroupBox()
         convert_form = QFormLayout(convert_box)
+        self.conversion_step_title = self.make_step_header(convert_form, '3', 'Background conversion', '#327e58')
         self.format = QComboBox()
         self.format.addItems(FORMATS)
         self.format.setCurrentText(english_options({'format': self.settings.value('format', 'MP4 / H.264')})['format'])
@@ -161,26 +166,44 @@ class MainWindow(QMainWindow):
         settings_row.addWidget(convert_box, 1)
         layout.addLayout(settings_row)
         self.format_changed()
-        buttons = QHBoxLayout()
-        self.start_button = QPushButton('Start capture')
-        self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        self.start_button.setObjectName('primary')
-        self.start_button.clicked.connect(self.start_capture)
-        self.stop_button = QPushButton('Stop && convert')
-        self.stop_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop))
-        self.stop_button.setToolTip('Finish capture, convert the footage and offer to start the next tape.')
-        self.stop_button.clicked.connect(lambda: self.stop_capture(False))
-        self.cancel_button = QPushButton('Cancel capture')
-        self.cancel_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
-        self.cancel_button.setToolTip('Stop capture and keep the raw file without converting it.')
-        self.cancel_button.clicked.connect(lambda: self.stop_capture(True))
-        buttons.addStretch()
-        buttons.addWidget(self.start_button)
-        buttons.addWidget(self.stop_button)
-        buttons.addWidget(self.cancel_button)
-        buttons.addStretch()
+        current_capture = QGroupBox('Current capture')
+        current_capture.setObjectName('currentCapture')
+        current_capture.setStyleSheet('QGroupBox#currentCapture {border:2px solid #a8323e;border-radius:8px;margin-top:10px;padding:10px;}')
+        capture_layout = QVBoxLayout(current_capture)
+        capture_header = QHBoxLayout()
+        self.live_lamp = QLabel('● LIVE')
+        self.live_lamp.setObjectName('liveLamp')
+        self.live_lamp.setStyleSheet('QLabel#liveLamp {color:white;background:#d92736;border-radius:8px;padding:5px 10px;font-weight:800;}')
+        self.live_lamp.hide()
+        capture_header.addWidget(self.live_lamp)
         self.live = QLabel('Ready')
-        layout.addWidget(self.live)
+        self.live.setStyleSheet('font-size:16px;font-weight:600;padding:4px;')
+        capture_header.addWidget(self.live, 1)
+        self.start_button = QPushButton('Start capture')
+        self.start_button.setObjectName('captureAction')
+        self.start_button.setMinimumHeight(44)
+        self.start_button.clicked.connect(self.capture_action)
+        capture_header.addWidget(self.start_button)
+        capture_layout.addLayout(capture_header)
+        feedback = QHBoxLayout()
+        self.capture_feedback = QLabel()
+        self.capture_feedback.setWordWrap(True)
+        feedback.addWidget(self.capture_feedback, 1)
+        self.check_devices_button = QPushButton('Check devices')
+        self.check_devices_button.clicked.connect(self.rescan_devices)
+        feedback.addWidget(self.check_devices_button)
+        self.retry_capture_button = QPushButton('Retry capture')
+        self.retry_capture_button.clicked.connect(self.retry_capture_start)
+        feedback.addWidget(self.retry_capture_button)
+        capture_layout.addLayout(feedback)
+        self.capture_feedback.hide()
+        self.check_devices_button.hide()
+        self.retry_capture_button.hide()
+        layout.addWidget(current_capture)
+        self.live_blink_on = True
+        self.live_blink_timer = QTimer(self)
+        self.live_blink_timer.setInterval(500)
+        self.live_blink_timer.timeout.connect(self.blink_live)
         split = QSplitter(Qt.Orientation.Vertical)
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(['Tape', 'Camera', 'Status', 'Progress', 'Details'])
@@ -224,26 +247,18 @@ class MainWindow(QMainWindow):
         self.clear_history_button.setToolTip('Remove finished and failed jobs from the list. Keep video files and active or queued jobs.')
         self.clear_history_button.clicked.connect(self.clear_history)
         bottom.addWidget(self.clear_history_button)
+        bottom.addStretch()
+        self.cancel_all_button = QPushButton('Cancel all')
+        self.cancel_all_button.setObjectName('cancelAll')
+        self.cancel_all_button.setStyleSheet('QPushButton#cancelAll {background:#b42332;color:white;font-weight:700;border:1px solid #e34c59;} QPushButton#cancelAll:disabled {background:#49353a;color:#aaa;}')
+        self.cancel_all_button.setToolTip('Stop all active captures and the current conversion. Queued jobs will remain queued.')
+        self.cancel_all_button.clicked.connect(self.cancel_all)
+        bottom.addWidget(self.cancel_all_button)
         self.version_label = QLabel(f'Version {__version__}')
         self.version_label.setToolTip('MiniDV Capture application version')
         bottom.insertWidget(0, self.version_label)
         bottom.insertStretch(1, 1)
         layout.addLayout(bottom)
-        layout.addLayout(buttons)
-        feedback = QHBoxLayout()
-        self.capture_feedback = QLabel()
-        self.capture_feedback.setWordWrap(True)
-        feedback.addWidget(self.capture_feedback, 1)
-        self.check_devices_button = QPushButton('Check devices')
-        self.check_devices_button.clicked.connect(self.rescan_devices)
-        feedback.addWidget(self.check_devices_button)
-        self.retry_capture_button = QPushButton('Retry capture')
-        self.retry_capture_button.clicked.connect(self.retry_capture_start)
-        feedback.addWidget(self.retry_capture_button)
-        layout.addLayout(feedback)
-        self.capture_feedback.hide()
-        self.check_devices_button.hide()
-        self.retry_capture_button.hide()
         self.tray = QSystemTrayIcon(self.windowIcon(), self)
         self.tray.setToolTip('MiniDV Capture')
         self.tray_menu = QMenu(self)
@@ -283,6 +298,25 @@ class MainWindow(QMainWindow):
                 return strings[source] + text[len(source):]
         return text
 
+    def make_step_header(self, layout, number, title, color):
+        row = QHBoxLayout()
+        badge = QLabel(number)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setFixedSize(34, 34)
+        badge.setStyleSheet(f'color:white;background:{color};border-radius:17px;font-size:20px;font-weight:800;')
+        label = QLabel(self.tr(title))
+        label.setObjectName('stepTitle')
+        row.addWidget(badge)
+        row.addWidget(label)
+        row.addStretch()
+        header = QWidget()
+        header.setLayout(row)
+        if isinstance(layout, QFormLayout):
+            layout.addRow(header)
+        else:
+            layout.addWidget(header)
+        return label
+
     def change_language(self, _index):
         previous_default = self.tr('Tape')
         self.language = self.language_combo.currentData()
@@ -309,13 +343,16 @@ class MainWindow(QMainWindow):
         self.rescan_button.setToolTip(self.tr('Rescan FireWire devices and access permissions, including after a disconnect.'))
         self.auto_next.setToolTip(self.tr('Uses AV/C cassette detection and automatic playback. Falls back to Start next tape if unsupported.'))
         self.delete_raw.setToolTip(self.tr('Only after duration, audio, video and full decoding checks. Originals are kept if any check fails.'))
-        self.stop_button.setToolTip(self.tr('Finish capture, convert the footage and offer to start the next tape.'))
-        self.cancel_button.setToolTip(self.tr('Stop capture and keep the raw file without converting it.'))
+        self.start_button.setToolTip(self.tr('Click to stop the active capture and start conversion.') if self.captures.active() else self.tr('Start recording from the selected camera.'))
+        self.cancel_all_button.setToolTip(self.tr('Stop all active captures and the current conversion. Queued jobs will remain queued.'))
         self.clear_history_button.setToolTip(self.tr('Remove finished and failed jobs from the list. Keep video files and active or queued jobs.'))
         self.version_label.setToolTip(self.tr('MiniDV Capture application version'))
         self.open_action.setText(self.tr('Open'))
         self.quit_action.setText(self.tr('Quit'))
         self.table.setHorizontalHeaderLabels([self.tr(x) for x in ('Tape', 'Camera', 'Status', 'Progress', 'Details')])
+        self.camera_step_title.setText(self.tr('Camera'))
+        self.capture_step_title.setText(self.tr('Capture'))
+        self.conversion_step_title.setText(self.tr('Background conversion'))
         self.preview.retranslate()
         self.refresh()
 
@@ -467,6 +504,38 @@ class MainWindow(QMainWindow):
         session.stop('cancel' if cancelled else 'complete')
         self.refresh()
 
+    def capture_action(self):
+        device = self.selected_device()
+        session = self.captures.sessions.get(device.guid) if device else None
+        if session and session.active:
+            self.stop_capture(False)
+        else:
+            self.start_capture()
+
+    def blink_live(self):
+        self.live_blink_on = not self.live_blink_on
+        color = '#e3293b' if self.live_blink_on else '#6e1b25'
+        self.live_lamp.setStyleSheet(f'QLabel#liveLamp {{color:white;background:{color};border-radius:8px;padding:5px 10px;font-weight:800;}}')
+
+    def cancel_all(self):
+        if not self.captures.active() and not self.queue.job:
+            return
+        dialog = QMessageBox(QMessageBox.Icon.Warning, self.tr('Cancel all'),
+            self.tr('Stop all active captures and the current conversion? Partial recordings will be kept; queued jobs will remain queued.'),
+            QMessageBox.StandardButton.NoButton, self)
+        yes = dialog.addButton(self.tr('Yes'), QMessageBox.ButtonRole.AcceptRole)
+        no = dialog.addButton(self.tr('No'), QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(no)
+        dialog.exec()
+        if dialog.clickedButton() != yes:
+            return
+        for guid in list(self.tape_watchers):
+            self.stop_tape_watcher(guid)
+        self.queue.cancel()
+        for session in self.captures.active():
+            session.stop('cancel')
+        self.refresh()
+
     def retry_capture_start(self):
         if not self.retry_capture:
             return
@@ -491,9 +560,15 @@ class MainWindow(QMainWindow):
         session = self.captures.sessions.get(d.guid) if d else None
         active = bool(session and session.active)
         self.preview.set_session(session if active and not session.reason else None)
-        self.start_button.setEnabled(bool(d) and not active)
-        self.stop_button.setEnabled(active and not session.reason)
-        self.cancel_button.setEnabled(active and not session.reason)
+        stopping = bool(active and session.reason)
+        self.start_button.setEnabled(bool(d) and not stopping)
+        self.start_button.setText(self.tr('Stopping…') if stopping else
+                                  self.tr('Stop && convert') if active else self.tr('Start capture'))
+        self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop if active else QStyle.StandardPixmap.SP_MediaPlay))
+        self.start_button.setStyleSheet('QPushButton#captureAction {background:#bc6c20;color:white;font-size:16px;font-weight:700;padding:8px 18px;border-radius:6px;}' if active else
+                                        'QPushButton#captureAction {background:#267d48;color:white;font-size:16px;font-weight:700;padding:8px 18px;border-radius:6px;}')
+        has_tasks = bool(self.captures.active() or self.queue.job)
+        self.cancel_all_button.setEnabled(has_tasks)
         if active:
             seconds = int(time.monotonic() - session.started)
             suffix = (' · ' + self.tr('dvgrab started; waiting for PLAY') if session.job['options']['manual'] and session.process_started_ok else
@@ -505,21 +580,31 @@ class MainWindow(QMainWindow):
             self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
                               f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s{suffix}')
             if session.bytes:
+                self.live_lamp.show()
+                if not self.live_blink_timer.isActive():
+                    self.live_blink_on = True
+                    self.live_blink_timer.start()
                 self.capture_feedback.setText(self.tr('DV data is arriving and the recording file is growing.'))
                 self.capture_feedback.show()
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
             elif session.process_started_ok:
+                self.live_lamp.hide()
+                self.live_blink_timer.stop()
                 self.capture_feedback.setText(self.tr('dvgrab is running. No DV data has arrived yet. In Manual mode, press PLAY on the camera; otherwise check camera mode and connection.'))
                 self.capture_feedback.show()
                 self.check_devices_button.show()
                 self.retry_capture_button.hide()
             else:
+                self.live_lamp.hide()
+                self.live_blink_timer.stop()
                 self.capture_feedback.setText(self.tr('Starting dvgrab…'))
                 self.capture_feedback.show()
                 self.check_devices_button.hide()
                 self.retry_capture_button.hide()
         else:
+            self.live_lamp.hide()
+            self.live_blink_timer.stop()
             active_count = len(self.captures.active())
             self.live.setText((f'{active_count} Aufnahme(n) aktiv' if self.language == 'de' else f'{active_count} capture(s) active')
                               if active_count else self.tr('Ready'))
@@ -869,8 +954,9 @@ def apply_theme(app):
     palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor('#87909e'))
     app.setPalette(palette)
     app.setStyleSheet('QLabel#title {font-size:26px;font-weight:700;} '
-        'QGroupBox {font-weight:600;border:1px solid #354155;border-radius:8px;margin-top:12px;padding:16px 10px 8px;} '
-        'QGroupBox::title {subcontrol-origin:margin;left:12px;padding:0 5px;} '
+        'QGroupBox {font-weight:700;font-size:14px;border:1px solid #46556a;border-radius:8px;margin-top:12px;padding:16px 10px 8px;} '
+        'QGroupBox::title {subcontrol-origin:margin;left:12px;padding:0 5px;color:#9fc7ff;} '
+        'QLabel#stepTitle {font-size:16px;font-weight:700;color:#e8edf5;} '
         'QPushButton {padding:8px 12px;border-radius:5px;} QPushButton#primary {background:#246bc1;color:white;font-weight:600;} '
         'QPushButton#primary:disabled {background:#273647;color:#87909e;} '
         'QLineEdit,QComboBox,QSpinBox {padding:5px;} QTableWidget {gridline-color:#303b4b;}')

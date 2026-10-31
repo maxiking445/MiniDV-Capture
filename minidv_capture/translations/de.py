@@ -213,4 +213,18 @@ STRINGS = {
     'Unsafe raw file path; original kept': 'Unsicherer Rohdateipfad; Original wurde behalten.',
     'Verified output missing; original kept': 'Geprüfte Ausgabe fehlt; Original wurde behalten.',
     'File changed since verification; original kept': 'Datei wurde seit der Prüfung verändert; Original wurde behalten.',
+    'Current capture': 'Aktuelle Aufnahme', 'Cancel all': 'Alles abbrechen',
+    'Click to stop the active capture and start conversion.': 'Klicken, um die Aufnahme zu beenden und die Konvertierung zu starten.',
+    'Start recording from the selected camera.': 'Aufnahme mit der ausgewählten Kamera starten.',
+    'Stop all active captures and the current conversion. Queued jobs will remain queued.':
+        'Alle laufenden Aufnahmen und die aktuelle Konvertierung beenden. Wartende Aufträge bleiben in der Warteschlange.',
+    'Stop all active captures and the current conversion? Partial recordings will be kept; queued jobs will remain queued.':
+        'Alle laufenden Aufnahmen und die aktuelle Konvertierung abbrechen? Teilaufnahmen bleiben erhalten; wartende Aufträge bleiben in der Warteschlange.',
+    'Stopping…': 'Wird beendet …',
+    'Choose the camera to use and check that device access is ready.':
+        'Kamera auswählen und prüfen, ob der Gerätezugriff bereit ist.',
+    'Set the tape name and destination, then review the capture options.':
+        'Kassettenname und Speicherort festlegen und die Aufnahmeeinstellungen prüfen.',
+    'Choose the output format and quality used after capture.':
+        'Ausgabeformat und Qualität für die anschließende Konvertierung auswählen.',
 }

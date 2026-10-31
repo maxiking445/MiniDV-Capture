@@ -285,9 +285,12 @@ class MainWindow(QMainWindow):
             for widget in self.findChildren(kind):
                 source = widget.property('source_text')
                 if source is None:
-                    source = widget.text()
+                    source = widget.title() if isinstance(widget, QGroupBox) else widget.text()
                     widget.setProperty('source_text', source)
-                widget.setText(self.tr(source))
+                if isinstance(widget, QGroupBox):
+                    widget.setTitle(self.tr(source))
+                else:
+                    widget.setText(self.tr(source))
         self.mode.setItemText(0, self.tr('Manual · PLAY on camera'))
         self.mode.setItemText(1, self.tr('Automatic · AV/C'))
         self.auto_tape_name.setToolTip(self.tr('When enabled, Tape8-001 is followed by Tape9-001. When disabled, captures keep the same tape name and folder numbering continues, for example Tape8-002.'))

@@ -20,7 +20,7 @@ def decode_medium(response):
     return 'unknown'
 
 
-def query_medium(guid):
+def query_medium(guid, *, stop_transport=False):
     device = next((d for d in discover() if d.guid == guid), None)
     if not device or device.card < 0 or not device.accessible:
         return 'disconnected'
@@ -47,9 +47,15 @@ def query_medium(guid):
             # STATUS, VCR subunit 0, MEDIUM_INFO. No transport/control command.
             # MEDIUM INFO uses 0x7f for both operands (not the usual 0xff).
             request = (c.c_uint32 * 2)(0x0120da7f, 0x7fffffff)
+            if stop_transport:
+                # CONTROL, VCR subunit 0, WIND / STOP (libavc1394 constants).
+                request = (c.c_uint32 * 1)(0x0020c460)
             length = c.c_uint()
-            response = avc.avc1394_transaction_block2(handle, node, request, 2, c.byref(length), 1)
+            response = avc.avc1394_transaction_block2(handle, node, request, len(request), c.byref(length), 1)
             try:
+                if stop_transport:
+                    return ('stopped' if response and length.value and
+                            response[0] & 0xffffff00 == 0x0920c400 else 'unknown')
                 return decode_medium(response[0]) if response and length.value else 'unknown'
             finally:
                 avc.avc1394_transaction_block_close(handle)

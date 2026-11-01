@@ -73,3 +73,19 @@ class TapeChangeTests(unittest.TestCase):
         with patch('minidv_capture.tape_change.discover', return_value=[DEVICE]), patch('minidv_capture.tape_change.c.CDLL', side_effect=[raw, rom, avc]):
             self.assertEqual(query_medium(DEVICE.guid), 'present')
         raw.raw1394_destroy_handle.assert_called_once_with(1)
+
+    def test_stop_targets_selected_guid_and_requires_acknowledgement(self):
+        raw, rom, avc = Mock(), Mock(), Mock()
+        raw.raw1394_new_handle_on_port.return_value = 1
+        raw.raw1394_get_nodecount.return_value = 2
+        rom.rom1394_get_guid.side_effect = [123, int(DEVICE.guid, 16)]
+        def transaction(handle, node, request, length, response_length, retry):
+            self.assertEqual(node, 1)
+            self.assertEqual(list(request), [0x0020c460])
+            self.assertEqual(length, 1)
+            c.cast(response_length, c.POINTER(c.c_uint))[0] = 1
+            return (c.c_uint32 * 1)(0x0920c460)
+        avc.avc1394_transaction_block2.side_effect = transaction
+        with patch('minidv_capture.tape_change.discover', return_value=[DEVICE]), patch('minidv_capture.tape_change.c.CDLL', side_effect=[raw, rom, avc]):
+            self.assertEqual(query_medium(DEVICE.guid, stop_transport=True), 'stopped')
+        raw.raw1394_destroy_handle.assert_called_once_with(1)

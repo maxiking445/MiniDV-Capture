@@ -3,6 +3,7 @@ import os
 import shutil
 import time
 import uuid
+import sys
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 from .devices import Device, discover
 from .process import available, executable, interrupt
@@ -63,6 +64,34 @@ class CaptureSession(QObject):
         self.log_tail = ''
         self.logfile = Path(job['directory']) / 'capture.log'
         self.process_started_ok = False
+        self.stop_process = QProcess(self)
+        self.stop_deadline = QTimer(self)
+        self.stop_deadline.setSingleShot(True)
+        self.stop_deadline.setInterval(3000)
+        self.stop_deadline.timeout.connect(self.transport_stop_timeout)
+        self.stop_process.finished.connect(self.transport_stopped)
+
+    def stop_transport(self):
+        if not self.process_started_ok:
+            return
+        args = [] if getattr(sys, 'frozen', False) else ['-m', 'minidv_capture']
+        self._write_log('Requesting camcorder STOP via AV/C')
+        self.stop_process.start(sys.executable, args + ['--transport-stop', self.device.guid])
+        self.stop_deadline.start()
+
+    def transport_stop_timeout(self):
+        self.stop_process.kill()
+        message = 'Camcorder STOP timed out. Stop playback on the camera if it is still running.'
+        self._write_log(message)
+        self.log.emit(message)
+
+    def transport_stopped(self, code, status):
+        self.stop_deadline.stop()
+        result = bytes(self.stop_process.readAllStandardOutput()).decode(errors='replace').strip()
+        message = ('Camcorder acknowledged STOP.' if code == 0 and result == 'stopped' else
+                   'Camcorder STOP was not confirmed. Stop playback on the camera if it is still running.')
+        self._write_log(message)
+        self.log.emit(message)
 
     @property
     def active(self):
@@ -138,6 +167,7 @@ class CaptureSession(QObject):
         if self.finished_once or self.reason:
             return
         self.reason = reason
+        self.stop_transport()
         self.job['error'] = error
         self.timer.stop()
         self._write_log(f'Stopping capture: reason={reason}; {error or "no additional error"}')
@@ -154,6 +184,8 @@ class CaptureSession(QObject):
     def finished(self, code, status):
         if self.finished_once:
             return
+        if not self.reason:
+            self.stop_transport()
         self.read_log()
         self._write_log(f'dvgrab exited: code={code}; status={status}; requested_stop={self.reason or "none"}')
         self.finished_once = True
@@ -202,6 +234,7 @@ class CaptureManager(QObject):
         return [s for s in self.sessions.values() if s.active]
 
     def start(self, device: Device, folder: Path, label: str, options: dict):
+        self.check_transport_stopped(device)
         if not available('dvgrab'):
             raise RuntimeError('dvgrab is missing. Install it through Setup.')
         fresh = {d.guid: d for d in discover()}.get(device.guid)
@@ -235,6 +268,7 @@ class CaptureManager(QObject):
         return session
 
     def resume(self, job):
+        self.check_transport_stopped(Device(**job['device']))
         if not job.get('capture_incomplete'):
             raise ValueError('This tape has no interrupted capture to continue.')
         if job['state'] not in {'interrupted', 'error', 'cancelled'}:
@@ -264,3 +298,9 @@ class CaptureManager(QObject):
         session.start()
         self.changed.emit()
         return session
+
+    def check_transport_stopped(self, device):
+        for session in self.sessions.values():
+            if (session.device.bus == device.bus and
+                    session.stop_process.state() != QProcess.ProcessState.NotRunning):
+                raise RuntimeError('Waiting for camcorder STOP to finish. Please retry shortly.')

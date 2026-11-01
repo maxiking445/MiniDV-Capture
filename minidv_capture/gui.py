@@ -29,6 +29,7 @@ MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE = 1_100_000_000  # About five minutes of DV v
 
 class MainWindow(QMainWindow):
     quit_requested = Signal()
+    shutdown_requested = Signal(object)
 
     def __init__(self, store):
         super().__init__()
@@ -685,6 +686,8 @@ class MainWindow(QMainWindow):
         self.start_capture(device=fresh, options_override=options)
 
     def refresh(self):
+        if self.shutting_down:
+            return
         missing = [x for x in ('dvgrab', 'ffmpeg', 'ffprobe') if not available(x)]
         self.dependencies.setText(self.tr('Missing components: ') + ', '.join(missing) + self.tr(' · Install missing components in Setup.') if missing else
                                   self.tr('All components ready'))
@@ -981,6 +984,9 @@ class MainWindow(QMainWindow):
         return size >= MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE
 
     def capture_failed(self, job):
+        if self.shutting_down:
+            self.append_log(job['name'] + ': ' + job['error'])
+            return
         self.notify('Capture stopped', job['error'])
         self.append_log(job['name'] + ': ' + job['error'])
         if 'No DV data received' in job.get('error', ''):
@@ -1067,12 +1073,26 @@ class MainWindow(QMainWindow):
             event.ignore()
             if dialog.clickedButton() == yes:
                 self.shutting_down = True
+                processes = [s.process for s in self.captures.active()]
+                processes.extend(s.stop_process for s in self.captures.sessions.values())
+                processes.append(self.queue.process)
+                if self.preview.decoder:
+                    processes.append(self.preview.decoder)
+                self.shutdown_requested.emit([p.processId() for p in processes if p is not None])
+                self.scan_timer.stop()
+                self.live_blink_timer.stop()
+                self.record_step_timer.stop()
+                self.preview.stop()
                 for guid in list(self.tape_watchers):
                     self.stop_tape_watcher(guid)
                 for dialog in list(self.dialogs):
                     dialog.close()
                 self.queue.cancel()
                 for session in self.captures.active():
+                    # A previous signal-loss stop must not turn into a completed
+                    # tape or start conversion while the application is exiting.
+                    if session.reason:
+                        session.reason = 'cancel'
                     session.stop('cancel')
                 self.shutdown_timer = QTimer(self)
                 self.shutdown_timer.setInterval(100)

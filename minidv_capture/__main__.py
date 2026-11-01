@@ -6,14 +6,14 @@ from PySide6.QtCore import QLockFile, QStandardPaths, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 from .storage import Store
 from .gui import MainWindow, apply_theme
-from .process import available
+from .process import available, start_shutdown_watchdog
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == '--media-status':
+    if len(sys.argv) == 3 and sys.argv[1] in ('--media-status', '--transport-stop'):
         from .tape_change import query_medium
         try:
-            print(query_medium(sys.argv[2]))
+            print(query_medium(sys.argv[2], stop_transport=sys.argv[1] == '--transport-stop'))
         except (OSError, ValueError, AttributeError):
             print('unsupported')
         return 0
@@ -42,6 +42,7 @@ def main():
     apply_theme(app)
     window = MainWindow(store)
     window.quit_requested.connect(app.quit)
+    window.shutdown_requested.connect(start_shutdown_watchdog)
     window.captures.log.connect(logging.info)
     window.queue.log.connect(logging.info)
     window.show()

@@ -10,6 +10,7 @@ STRINGS = {
     'Back': 'Zurück',
     'Next': 'Weiter',
     'Show jobs and log': 'Aufträge und Protokoll anzeigen',
+    'Hide jobs and log': 'Aufträge und Protokoll ausblenden',
     'Setup': 'Einrichtung', '1 · Camera': '1 · Kamera', '2 · Capture': '2 · Aufnahme',
     '3 · Background conversion': '3 · Konvertierung im Hintergrund',
     '↻  Rescan cameras': '↻  Kameras neu suchen', 'Browse …': 'Durchsuchen …',

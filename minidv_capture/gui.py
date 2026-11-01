@@ -2,8 +2,8 @@ from pathlib import Path
 import json
 import re
 import time
-from PySide6.QtCore import Qt, QSettings, QTimer, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtCore import Qt, QSettings, QTimer, QUrl, Signal, QSize
+from PySide6.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QFileDialog, QCheckBox, QSpinBox, QGroupBox,
     QFormLayout, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
@@ -83,11 +83,44 @@ class MainWindow(QMainWindow):
             button = QPushButton()
             button.setCheckable(True)
             button.setMinimumHeight(48)
+            badge = QPixmap(64, 64)
+            badge.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(badge)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor('#e8edf5'))
+            painter.drawEllipse(2, 2, 60, 60)
+            painter.setPen(QColor('#24558e'))
+            font = button.font()
+            font.setPixelSize(34)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(badge.rect(), Qt.AlignmentFlag.AlignCenter, str(index + 1))
+            painter.end()
+            button.setIcon(QIcon(badge))
+            button.setIconSize(QSize(32, 32))
             button.setStyleSheet('QPushButton {padding:10px;font-weight:600;border-radius:8px;}'
                                 'QPushButton:checked {background:#3478c7;color:white;}')
             self.step_group.addButton(button, index)
             self.step_buttons.append(button)
             steps.addWidget(button, 1)
+        self.record_step_idle_icon = self.step_buttons[3].icon()
+        self.record_step_icons = []
+        for color in ('#681d28', '#ff3048'):
+            indicator = QPixmap(96, 64)
+            indicator.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(indicator)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.drawPixmap(0, 0, badge)
+            painter.setPen(QColor('#ff8997'))
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(70, 20, 24, 24)
+            painter.end()
+            self.record_step_icons.append(QIcon(indicator))
+        self.record_step_blink_on = False
+        self.record_step_timer = QTimer(self)
+        self.record_step_timer.setInterval(500)
+        self.record_step_timer.timeout.connect(self.blink_record_step)
         layout.addLayout(steps)
         self.pages = QStackedWidget()
         self.step_group.idClicked.connect(self.set_step)
@@ -240,6 +273,14 @@ class MainWindow(QMainWindow):
         capture_layout.addWidget(preview_box, 1)
         self.details_button = QPushButton('Show jobs and log')
         self.details_button.setCheckable(True)
+        self.details_button.setMinimumHeight(40)
+        self.details_button.setStyleSheet(
+            'QPushButton {border:1px solid #6b85a5;border-radius:6px;'
+            'background:#263345;color:#e8edf5;padding:8px 14px;font-weight:600;}'
+            'QPushButton:hover {background:#344963;border-color:#9fc7ff;}'
+            'QPushButton:checked {background:#344963;border-color:#9fc7ff;}'
+            'QPushButton:focus {border:2px solid #9fc7ff;}')
+        self.details_button.toggled.connect(self.update_details_button)
         capture_layout.addWidget(self.details_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.capture_details = QWidget()
         details_layout = QVBoxLayout(self.capture_details)
@@ -283,12 +324,28 @@ class MainWindow(QMainWindow):
         capture_layout.addLayout(action_row)
         navigation = QHBoxLayout()
         self.back_button = QPushButton('Back')
+        self.back_button.setMinimumHeight(40)
+        self.back_button.setStyleSheet(
+            'QPushButton {background:#263345;color:#e8edf5;border:1px solid #6b85a5;'
+            'border-radius:6px;padding:8px 18px;font-weight:600;}'
+            'QPushButton:hover {background:#344963;border-color:#9fc7ff;}'
+            'QPushButton:pressed {background:#1b293b;}'
+            'QPushButton:focus {border:2px solid #9fc7ff;}'
+            'QPushButton:disabled {background:#202936;color:#87909e;border-color:#46556a;}')
         self.back_button.clicked.connect(lambda: self.set_step(self.pages.currentIndex() - 1))
         navigation.addWidget(self.back_button)
         navigation.addStretch()
         navigation.addWidget(self.version_label)
         navigation.addStretch()
         self.next_button = QPushButton('Next')
+        self.next_button.setMinimumHeight(40)
+        self.next_button.setStyleSheet(
+            'QPushButton {background:#246bc1;color:white;border:1px solid #6aa6ef;'
+            'border-radius:6px;padding:8px 18px;font-weight:600;}'
+            'QPushButton:hover {background:#347dd1;border-color:#b5d6ff;}'
+            'QPushButton:pressed {background:#1c5397;}'
+            'QPushButton:focus {border:2px solid #b5d6ff;}'
+            'QPushButton:disabled {background:#273647;color:#87909e;border-color:#46556a;}')
         self.next_button.clicked.connect(lambda: self.set_step(self.pages.currentIndex() + 1))
         navigation.addWidget(self.next_button)
         layout.addLayout(navigation)
@@ -345,6 +402,12 @@ class MainWindow(QMainWindow):
         if index == 3:
             # Once configured, always open the recording screen on future launches.
             self.settings.setValue('wizard_completed', True)
+
+    def update_details_button(self, expanded=None):
+        expanded = self.details_button.isChecked()
+        self.details_button.setText(self.tr('Hide jobs and log' if expanded else 'Show jobs and log'))
+        self.details_button.setIcon(self.style().standardIcon(
+            QStyle.StandardPixmap.SP_ArrowUp if expanded else QStyle.StandardPixmap.SP_ArrowDown))
 
     def tr(self, text):
         strings = LANGUAGES.get(self.language, LANGUAGES['en'])['strings']
@@ -411,7 +474,9 @@ class MainWindow(QMainWindow):
         self.capture_step_title.setText(self.tr('Capture'))
         self.conversion_step_title.setText(self.tr('Background conversion'))
         for index, title in enumerate(('Camera', 'Capture settings', 'Conversion', 'Record')):
-            self.step_buttons[index].setText(f'{index + 1}. {self.tr(title)}')
+            self.step_buttons[index].setText(self.tr(title))
+            self.step_buttons[index].setAccessibleName(f'{index + 1}. {self.tr(title)}')
+        self.update_details_button()
         self.preview.retranslate()
         self.refresh()
 
@@ -577,6 +642,10 @@ class MainWindow(QMainWindow):
         color = '#e3293b' if self.live_blink_on else '#6e1b25'
         self.live_lamp.setStyleSheet(f'QLabel#liveLamp {{color:white;background:{color};border-radius:8px;padding:5px 10px;font-weight:800;}}')
 
+    def blink_record_step(self):
+        self.record_step_blink_on = not self.record_step_blink_on
+        self.step_buttons[3].setIcon(self.record_step_icons[int(self.record_step_blink_on)])
+
     def cancel_all(self):
         if not self.captures.active() and not self.queue.job:
             return
@@ -629,6 +698,20 @@ class MainWindow(QMainWindow):
                                         'QPushButton#captureAction {background:#267d48;color:white;font-size:16px;font-weight:700;padding:8px 18px;border-radius:6px;}')
         has_tasks = bool(self.captures.active() or self.queue.job)
         self.cancel_all_button.setEnabled(has_tasks)
+        # Track every camera, independently of the selected camera and wizard page.
+        recording = any(s.bytes and not s.reason for s in self.captures.active())
+        if recording:
+            if not self.record_step_timer.isActive():
+                self.step_buttons[3].setIconSize(QSize(48, 32))
+                self.record_step_blink_on = False
+                self.blink_record_step()
+                self.record_step_timer.start()
+            self.step_buttons[3].setAccessibleDescription(self.tr('Capturing'))
+        else:
+            self.record_step_timer.stop()
+            self.step_buttons[3].setIcon(self.record_step_idle_icon)
+            self.step_buttons[3].setIconSize(QSize(32, 32))
+            self.step_buttons[3].setAccessibleDescription('')
         if active:
             seconds = int(time.monotonic() - session.started)
             suffix = (' · ' + self.tr('dvgrab started; waiting for PLAY') if session.job['options']['manual'] and session.process_started_ok else

@@ -207,12 +207,18 @@ class GuiTests(unittest.TestCase):
         quit_requests = []
         self.window.quit_requested.connect(lambda: quit_requests.append(True))
         action = next(a for a in self.window.tray.contextMenu().actions() if a.text() == 'Quit')
+        def answer_dialog(dialog, role):
+            button = next(b for b in dialog.buttons() if dialog.buttonRole(b) == role)
+            button.click()
+
         try:
-            with patch('minidv_capture.gui.QMessageBox.question', return_value=QMessageBox.StandardButton.No):
+            with patch('minidv_capture.gui.QMessageBox.exec',
+                       new=lambda dialog: answer_dialog(dialog, QMessageBox.ButtonRole.RejectRole)):
                 action.trigger()
             self.assertFalse(quit_requests)
             self.assertFalse(session.reason)
-            with patch('minidv_capture.gui.QMessageBox.question', return_value=QMessageBox.StandardButton.Yes):
+            with patch('minidv_capture.gui.QMessageBox.exec',
+                       new=lambda dialog: answer_dialog(dialog, QMessageBox.ButtonRole.AcceptRole)):
                 action.trigger()
             self.assertEqual(session.reason, 'cancel')
             self.window.finish_shutdown()

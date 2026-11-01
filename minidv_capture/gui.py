@@ -63,6 +63,13 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout()
         top.addStretch()
         setup = QPushButton('Setup')
+        setup.setMinimumHeight(40)
+        setup.setStyleSheet(
+            'QPushButton {background:#263345;color:#e8edf5;border:1px solid #6b85a5;'
+            'border-radius:6px;padding:8px 18px;font-weight:600;}'
+            'QPushButton:hover {background:#344963;border-color:#9fc7ff;}'
+            'QPushButton:pressed {background:#1b293b;}'
+            'QPushButton:focus {border:2px solid #9fc7ff;}')
         setup.clicked.connect(self.setup)
         top.addWidget(setup)
         self.language_combo = QComboBox()

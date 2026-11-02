@@ -16,6 +16,7 @@ from .process import available
 from .preview import LivePreview
 from .preferences import english_options
 from .tape_change import TapeChangeWatcher
+from .recovery import FireWireRecovery
 from . import __version__
 from .setup import SetupDialog, project_root
 from .translations import LANGUAGES
@@ -42,6 +43,9 @@ class MainWindow(QMainWindow):
         self.tape_watchers = {}
         self.retry_capture = None
         self.shutting_down = False
+        self.recovery = FireWireRecovery(self)
+        self.recovery.finished.connect(self.recovery_finished)
+        self.recovery_retry = None
         try:
             self.device_options = json.loads(self.settings.value('device_options', '{}'))
             if not isinstance(self.device_options, dict):
@@ -594,6 +598,8 @@ class MainWindow(QMainWindow):
             self.folder.setText(directory)
 
     def start_capture(self, _checked=False, device=None, options_override=None):
+        if self.recovery.running:
+            return
         device = device or self.selected_device()
         if not device:
             self.error('No FireWire camera found. Check PLAYER/VCR mode, power and cable.')
@@ -627,7 +633,36 @@ class MainWindow(QMainWindow):
             self.retry_capture_button.hide()
             self.save_settings()
         except (OSError, ValueError, RuntimeError) as exc:
+            if 'FireWire driver is blocked' in str(exc):
+                self.recover_firewire(device, lambda: self.start_capture(device=device, options_override=options))
+                return
             self.error(str(exc))
+
+    def recover_firewire(self, device, retry):
+        if self.recovery.running:
+            return
+        if any(not session.reason for session in self.captures.active()) or self.queue.job:
+            self.error(self.tr('Stop active captures and wait for conversion to finish before repairing FireWire.'))
+            return
+        self.recovery_retry = retry
+        self.set_step(3)
+        self.capture_feedback.setText(self.tr('Repairing FireWire. Approve administrator access to reset the controller; capture will retry after recovery.'))
+        self.capture_feedback.show()
+        self.recovery.start(Path(device.bus).name)
+        self.refresh()
+
+    def recovery_finished(self, success, message):
+        self.append_log(message)
+        retry, self.recovery_retry = self.recovery_retry, None
+        if self.shutting_down:
+            return
+        self.refresh()
+        if success and retry:
+            self.capture_feedback.hide()
+            retry()
+        else:
+            self.capture_feedback.setText(self.tr('FireWire recovery failed. No new capture was started.') + '\n' + message)
+            self.capture_feedback.show()
 
     def stop_capture(self, cancelled):
         d = self.selected_device()
@@ -700,7 +735,7 @@ class MainWindow(QMainWindow):
         active = bool(session and session.active)
         self.preview.set_session(session if active and not session.reason else None)
         stopping = bool(active and session.reason)
-        self.start_button.setEnabled(bool(d) and not stopping)
+        self.start_button.setEnabled(bool(d) and not stopping and not self.recovery.running)
         self.start_button.setText(self.tr('Stopping…') if stopping else
                                   self.tr('Stop && convert') if active else self.tr('Start capture'))
         self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop if active else QStyle.StandardPixmap.SP_MediaPlay))
@@ -861,6 +896,8 @@ class MainWindow(QMainWindow):
             self.error(str(exc))
 
     def resume_capture(self, job):
+        if self.recovery.running:
+            return
         dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Resume capture'),
             self.tr('Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.'),
             QMessageBox.StandardButton.NoButton, self)
@@ -872,6 +909,11 @@ class MainWindow(QMainWindow):
         try:
             self.captures.resume(job)
         except (OSError, RuntimeError, ValueError) as exc:
+            if 'FireWire driver is blocked' in str(exc):
+                device = next((d for d in self.devices if d.guid == job['device']['guid']), None)
+                if device:
+                    self.recover_firewire(device, lambda: self.resume_capture(job))
+                    return
             self.error(str(exc))
 
     def remove_history_job(self, job):
@@ -1059,6 +1101,9 @@ class MainWindow(QMainWindow):
         self.settings.sync()
 
     def closeEvent(self, event):
+        if self.recovery.running:
+            self.recovery_retry = None
+            self.recovery.cancel()
         if self.shutting_down:
             event.ignore()
             return

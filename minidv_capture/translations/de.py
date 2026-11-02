@@ -4,6 +4,9 @@ CODE = 'de'
 NAME = 'Deutsch'
 FLAG = '🇩🇪'
 STRINGS = {
+    'Stop active captures and wait for conversion to finish before repairing FireWire.': 'Vor der FireWire-Reparatur laufende Aufnahmen stoppen und das Ende der Konvertierung abwarten.',
+    'Repairing FireWire. Approve administrator access to reset the controller; capture will retry after recovery.': 'FireWire wird repariert. Bitte den Administratorzugriff zum Zurücksetzen des Controllers bestätigen. Danach wird die Aufnahme erneut gestartet.',
+    'FireWire recovery failed. No new capture was started.': 'FireWire-Reparatur fehlgeschlagen. Es wurde keine neue Aufnahme gestartet.',
     'Capture settings': 'Aufnahme-Einstellungen',
     'Conversion': 'Konvertierung',
     'Record': 'Aufnahme',

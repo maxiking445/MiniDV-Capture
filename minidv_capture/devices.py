@@ -24,6 +24,25 @@ def read(path: Path) -> str:
         return ""
 
 
+def blocked_firewire_tasks(proc_root=Path('/proc')):
+    """Find threads stuck releasing FireWire, including orphaned old sessions.
+
+    The thread group leader can already be a zombie while a worker is still
+    blocked. Inspect individual threads, not just the process leader.
+    """
+    blocked = []
+    for process in proc_root.iterdir():
+        if not process.name.isdecimal():
+            continue
+        try:
+            for task in (process / 'task').iterdir():
+                if read(task / 'wchan') == 'fw_device_op_release':
+                    blocked.append(task.name)
+        except OSError:
+            continue
+    return blocked
+
+
 def discover(root=Path('/sys/bus/firewire/devices'), devroot=Path('/dev')) -> list[Device]:
     """Passive sysfs discovery; never sends an AV/C transport command.
 

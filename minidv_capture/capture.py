@@ -5,7 +5,7 @@ import time
 import uuid
 import sys
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
-from .devices import Device, discover
+from .devices import Device, discover, blocked_firewire_tasks
 from .process import available, executable, interrupt
 from .storage import Store
 
@@ -300,6 +300,13 @@ class CaptureManager(QObject):
         return session
 
     def check_transport_stopped(self, device):
+        blocked = blocked_firewire_tasks()
+        if blocked:
+            raise RuntimeError(
+                'The FireWire driver is blocked by an earlier capture (threads: '
+                + ', '.join(blocked) + '). No new capture was started. '
+                'Stop playback and power off the camera. If the driver remains blocked, '
+                'restart the computer before retrying. Existing recordings are kept.')
         for session in self.sessions.values():
             if (session.device.bus == device.bus and
                     session.stop_process.state() != QProcess.ProcessState.NotRunning):

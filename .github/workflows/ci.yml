@@ -32,7 +32,7 @@ jobs:
       - name: Install system media and Qt libraries
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dvgrab ffmpeg libegl1 libxcb-cursor0 libxkbcommon-x11-0
+          sudo apt-get install --yes dvgrab ffmpeg libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxkbcommon-x11-0
 
       - name: Install project
         run: |

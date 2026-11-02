@@ -3,7 +3,7 @@
 set -euo pipefail
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
-for tool in python dvgrab ffmpeg ffprobe curl; do
+for tool in python dvgrab ffmpeg ffprobe curl timeout; do
     command -v "$tool" >/dev/null || { printf 'Build-Abhängigkeit fehlt: %s\n' "$tool" >&2; exit 1; }
 done
 [[ $(uname -m) == x86_64 ]] || { echo 'Dieser Build ist für x86_64 vorgesehen.' >&2; exit 1; }
@@ -12,6 +12,7 @@ python -m venv --system-site-packages .build-venv
 mkdir -p build/packaging
 .build-venv/bin/python -m PyInstaller --noconfirm --clean --onedir --name minidv-capture \
     --paths "$project_dir" --specpath "$project_dir/build/packaging" \
+    --collect-submodules minidv_capture.translations \
     --add-data "$project_dir/assets:assets" \
     --add-data "$project_dir/scripts:scripts" \
     --add-data "$project_dir/LICENSE:licenses" \
@@ -47,8 +48,16 @@ chmod +x "$appdir/AppRun"
 for tool in dvgrab ffmpeg ffprobe; do
     test -x "$appdir/usr/lib/minidv-capture/_internal/bin/$tool"
 done
-QT_QPA_PLATFORM=offscreen XDG_DATA_HOME="$project_dir/build/smoke/data" \
-    XDG_CONFIG_HOME="$project_dir/build/smoke/config" "$appdir/AppRun" --smoke-test
+smoke_dir="$(mktemp -d "$project_dir/build/smoke.XXXXXX")"
+if QT_QPA_PLATFORM=offscreen XDG_DATA_HOME="$smoke_dir/data" \
+    XDG_CONFIG_HOME="$smoke_dir/config" timeout --kill-after=5s 30s "$appdir/AppRun" --smoke-test; then
+    echo 'GUI smoke test passed.'
+else
+    result=$?
+    printf 'GUI smoke test failed (exit %s). Logs: %s\n' "$result" "$smoke_dir" >&2
+    find "$smoke_dir" -name application.log -exec cat {} \; >&2
+    exit "$result"
+fi
 appimage_tool="${APPIMAGETOOL:-$project_dir/build/appimagetool-x86_64.AppImage}"
 if [[ ! -x "$appimage_tool" ]]; then
     curl --fail --location --retry 2 --output "$appimage_tool" \

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Developer/release build. End users launch the resulting AppImage directly.
 set -euo pipefail
+if [[ $# -gt 1 || ($# -eq 1 && $1 != --onedir-only) ]]; then
+    echo 'Usage: build-appimage.sh [--onedir-only]' >&2
+    exit 2
+fi
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 for tool in python dvgrab ffmpeg ffprobe curl timeout; do
@@ -48,22 +52,30 @@ chmod +x "$appdir/AppRun"
 for tool in dvgrab ffmpeg ffprobe; do
     test -x "$appdir/usr/lib/minidv-capture/_internal/bin/$tool"
 done
-smoke_dir="$(mktemp -d "$project_dir/build/smoke.XXXXXX")"
-if QT_QPA_PLATFORM=offscreen XDG_DATA_HOME="$smoke_dir/data" \
-    XDG_CONFIG_HOME="$smoke_dir/config" timeout --kill-after=5s 30s "$appdir/AppRun" --smoke-test; then
-    echo 'GUI smoke test passed.'
-else
-    result=$?
-    printf 'GUI smoke test failed (exit %s). Logs: %s\n' "$result" "$smoke_dir" >&2
-    find "$smoke_dir" -name application.log -exec cat {} \; >&2
-    exit "$result"
-fi
+smoke_test() {
+    local smoke_dir result
+    smoke_dir="$(mktemp -d "$project_dir/build/smoke.XXXXXX")"
+    echo "GUI smoke test: $*"
+    if QT_QPA_PLATFORM=offscreen XDG_DATA_HOME="$smoke_dir/data" \
+        XDG_CONFIG_HOME="$smoke_dir/config" timeout --kill-after=5s 30s "$@" --smoke-test; then
+        echo 'GUI smoke test passed.'
+    else
+        result=$?
+        printf 'GUI smoke test failed (exit %s). Logs: %s\n' "$result" "$smoke_dir" >&2
+        find "$smoke_dir" -name application.log -exec cat {} \; >&2
+        exit "$result"
+    fi
+}
+smoke_test "$appdir/AppRun"
+# CI exercises the same frozen application without downloading appimagetool.
+if [[ ${1:-} == --onedir-only ]]; then exit 0; fi
 appimage_tool="${APPIMAGETOOL:-$project_dir/build/appimagetool-x86_64.AppImage}"
 if [[ ! -x "$appimage_tool" ]]; then
-    curl --fail --location --retry 2 --output "$appimage_tool" \
+    curl --fail --location --retry 2 --connect-timeout 15 --max-time 180 --output "$appimage_tool" \
         https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
     chmod +x "$appimage_tool"
 fi
 ARCH=x86_64 "$appimage_tool" --appimage-extract-and-run "$appdir" "$project_dir/dist/MiniDV-Capture-x86_64.AppImage"
+smoke_test "$project_dir/dist/MiniDV-Capture-x86_64.AppImage" --appimage-extract-and-run
 sha256sum dist/MiniDV-Capture-x86_64.AppImage > dist/MiniDV-Capture-x86_64.AppImage.sha256
 printf '\nFertig: %s/dist/MiniDV-Capture-x86_64.AppImage\n' "$project_dir"

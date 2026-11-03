@@ -43,4 +43,18 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Check GUI startup
-        run: python -m minidv_capture --smoke-test
+        run: timeout --kill-after=5s 30s python -m minidv_capture --smoke-test
+
+      - name: Build and smoke test the frozen application
+        timeout-minutes: 10
+        run: ./packaging/build-appimage.sh --onedir-only
+
+      - name: Upload packaging diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-packaging-diagnostics
+          path: |
+            build/smoke.*/
+            build/minidv-capture/warn-*.txt
+          if-no-files-found: ignore

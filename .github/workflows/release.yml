@@ -83,12 +83,23 @@ jobs:
           sudo apt-get install --yes dvgrab ffmpeg libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxkbcommon-x11-0
 
       - name: Build and smoke test the single-file AppImage
+        timeout-minutes: 15
         env:
           QT_QPA_PLATFORM: offscreen
         run: ./packaging/build-appimage.sh
 
       - name: Build Debian package
         run: ./packaging/build-deb.sh
+
+      - name: Upload packaging diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-packaging-diagnostics
+          path: |
+            build/smoke.*/
+            build/minidv-capture/warn-*.txt
+          if-no-files-found: ignore
 
       - name: Commit version, push tag and publish release
         env:

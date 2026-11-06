@@ -1,6 +1,7 @@
 """Passive kernel-log monitoring; never opens or resets a FireWire device."""
 from pathlib import Path
 import re
+import json
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
@@ -13,15 +14,20 @@ FAULT = re.compile(r'firewire_ohci\s+([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]
 class FireWireHealth(QObject):
     fault = Signal(str, str)
     unavailable = Signal(str)
+    warning = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.faults = {}
+        self.live_faults = set()
+        self.dma_warnings = set()
         self.ready = False
         self.error = 'Checking the kernel log for FireWire faults. Please retry shortly.'
         self.stopping = False
         self.following = False
         self.cursor = ''
+        self.snapshot_cursors = set()
+        self.latest_timestamp = -1
         self.buffer = bytearray()
         self.process = QProcess(self)
         self.process.readyReadStandardOutput.connect(self.read_output)
@@ -33,13 +39,13 @@ class FireWireHealth(QObject):
         self.deadline.timeout.connect(self.timed_out)
 
     def start(self):
-        self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'cat', '-n', '200',
+        self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'json', '-n', '200',
                                          '--show-cursor', '--grep=' + FAULT_PATTERN])
         self.deadline.start(5000)
 
     def check(self, device):
         address = Path(device.bus).name.lower()
-        if address in self.faults:
+        if address in self.live_faults:
             raise RuntimeError(self.fault_message(address))
         if not self.ready or self.error:
             raise RuntimeError(self.error or 'FireWire health monitoring is not ready.')
@@ -52,14 +58,55 @@ class FireWireHealth(QObject):
 
     def observe(self, line):
         if line.startswith('-- cursor: '):
-            self.cursor = line[len('-- cursor: '):]
+            # With --grep and -n, journalctl may scan backwards and report
+            # a footer cursor older than the messages it actually printed.
+            if not self.snapshot_cursors:
+                self.cursor = line[len('-- cursor: '):]
             return
+        if line.startswith('{'):
+            try:
+                entry = json.loads(line)
+                cursor = entry['__CURSOR']
+                timestamp = int(entry['__MONOTONIC_TIMESTAMP'])
+                message = entry['MESSAGE']
+                if not isinstance(cursor, str) or not isinstance(message, str):
+                    return
+            except (ValueError, KeyError, TypeError):
+                return
+            if self.following:
+                if cursor in self.snapshot_cursors or timestamp < self.latest_timestamp:
+                    return
+            else:
+                self.snapshot_cursors.add(cursor)
+                if timestamp > self.latest_timestamp:
+                    self.latest_timestamp = timestamp
+                    self.cursor = cursor
+            line = message
         match = FAULT.search(line)
         if match:
             address = match[1].lower()
-            if address not in self.faults:
+            if self.following and 'IO_PAGE_FAULT' in line:
+                # A rejected DMA access is diagnostic evidence, not proof that
+                # capture has stalled. Do not abort a working/re-winding tape.
+                if address not in self.dma_warnings:
+                    self.dma_warnings.add(address)
+                    self.warning.emit(
+                        f'FireWire DMA warning on controller {address}. '
+                        'Capture has not been stopped by this warning. '
+                        'If the computer stutters or capture stalls, stop playback on the camera. '
+                        'Kernel: ' + line[:2048])
+            elif self.following:
+                # A historical warning must not suppress the first new fault.
+                if address not in self.live_faults:
+                    self.faults[address] = line[:2048]
+                    self.live_faults.add(address)
+                    self.fault.emit(address, self.fault_message(address))
+            elif address not in self.faults:
                 self.faults[address] = line[:2048]
-                self.fault.emit(address, self.fault_message(address))
+                self.warning.emit(
+                    f'Earlier kernel FireWire fault on controller {address}. '
+                    'This historical entry does not block capture. '
+                    'New faults will still stop capture. Kernel: ' + line[:2048])
 
     def read_output(self):
         self.buffer.extend(bytes(self.process.readAllStandardOutput()))
@@ -86,7 +133,7 @@ class FireWireHealth(QObject):
         self.following = True
         self.error = ''
         self.ready = True
-        self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'cat', '--follow',
+        self.process.start('journalctl', ['-k', '-b', '--no-pager', '-o', 'json', '--follow',
                                          '--after-cursor=' + self.cursor, '--grep=' + FAULT_PATTERN])
 
     def disable(self, message):

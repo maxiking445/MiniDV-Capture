@@ -60,6 +60,7 @@ def main():
     health = FireWireHealth(window)
     window.attach_health_monitor(health)
     health.fault.connect(lambda address, message: logging.error(message))
+    health.warning.connect(logging.warning)
     health.unavailable.connect(logging.warning)
     health.start()
     window.quit_requested.connect(app.quit)

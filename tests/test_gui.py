@@ -37,6 +37,20 @@ class GuiTests(unittest.TestCase):
         APP.processEvents()
         self.temp.cleanup()
 
+    def test_dma_warning_does_not_cancel_capture(self):
+        job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
+        session = CaptureSession(self.store, job, DEVICE, self.window.captures)
+        self.window.captures.sessions[DEVICE.guid] = session
+        try:
+            with patch.object(session, 'stop') as stop:
+                self.window.firewire_warning('FireWire DMA warning')
+            stop.assert_not_called()
+            self.assertEqual(session.reason, '')
+            self.assertEqual(job['state'], 'capturing')
+            self.assertIn('DMA warning', self.window.capture_feedback.text())
+        finally:
+            session.finished_once = True
+
     def test_kernel_fault_stops_capture_and_overrides_pending_completion(self):
         job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
         session = CaptureSession(self.store, job, DEVICE, self.window.captures)

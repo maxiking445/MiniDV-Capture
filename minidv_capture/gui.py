@@ -1109,8 +1109,14 @@ class MainWindow(QMainWindow):
 
     def attach_health_monitor(self, health):
         self.health = self.captures.health = health
+        health.warning.connect(self.firewire_warning)
         health.fault.connect(self.firewire_fault)
         health.unavailable.connect(lambda message: self.firewire_fault('', message))
+
+    def firewire_warning(self, message):
+        self.append_log(message)
+        self.capture_feedback.setText(message)
+        self.capture_feedback.show()
 
     def firewire_fault(self, address, message):
         self.append_log(message)

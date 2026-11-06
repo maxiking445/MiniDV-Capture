@@ -138,8 +138,10 @@ for reviewing, testing and maintaining the code.
 
 Capture now requires readable kernel logs through `journalctl`. Before capture,
 the app checks recent FireWire DMA/driver errors from the current boot, then
-monitors new errors asynchronously. An observed fault blocks that controller and
-stops its capture while keeping raw footage. Missing kernel-log access is shown
+monitors new errors asynchronously. Historical entries only produce a warning
+and do not block capture. New DMA page faults are visible warnings; they do not by themselves abort or
+block capture. A live stalled-DMA-context or controller-access failure blocks
+that controller and stops its capture while keeping raw footage. Missing kernel-log access is shown
 as an error and prevents capture; it is not treated as a healthy device.
 
 This cannot repair a stuck kernel/controller or guarantee host stability. See

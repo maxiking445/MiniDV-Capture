@@ -137,3 +137,26 @@ hardware comparison. Neither test has been performed here.
 Do not treat disabling IOMMU globally as an established fix: it changes DMA
 isolation and can hide rejected DMA accesses rather than correct their cause.
 No bootloader, IOMMU setting, kernel, or driver was changed by this work.
+
+## Correction: historical errors must not prevent a new attempt
+
+The initial implementation latched historical journal entries as current faults.
+That was too restrictive: a prior DMA error alone does not establish that the
+controller is still blocked. The startup snapshot now only emits a warning.
+After the snapshot completes, capture may start despite historical entries.
+Live faults still stop/block capture, including a new occurrence identical to a
+historical warning. Actual blocked FireWire tasks and still-running sessions
+remain protected by the existing process/bus checks. This supersedes the initial
+snapshot-blocking behavior described above.
+
+## Correction: a DMA page fault alone is not a capture-stall signal
+
+At 21:31:47 on November 6, a fresh IO_PAGE_FAULT arrived during startup/rewind,
+9 seconds after dvgrab started. The monitor itself stopped capture before any
+frames arrived. Treating any page fault as a controller hang was too broad.
+Live IO_PAGE_FAULT entries now produce one visible warning per controller per
+application run, without stopping playback/capture or latching a start block.
+Explicit DMA-context stalls and register-access failures still trigger the
+fault path. Existing blocked-task detection, bus ownership, signal-loss timeout,
+and bounded application shutdown remain enabled. This restores capture attempts
+but does not repair DMA faults or guarantee host stability.

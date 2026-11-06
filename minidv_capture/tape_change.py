@@ -1,10 +1,24 @@
 """Read-only AV/C medium queries, isolated from the GUI in a timed process."""
 import ctypes as c
 import sys
+import weakref
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
 
-from .devices import discover
+from .devices import discover, blocked_firewire_tasks
+
+
+_watchers = weakref.WeakSet()
+
+
+def pending_queries():
+    for watcher in list(_watchers):
+        try:
+            if watcher.process.state() != QProcess.ProcessState.NotRunning:
+                return True
+        except RuntimeError:  # Qt parent already destroyed its Python wrapper.
+            _watchers.discard(watcher)
+    return False
 
 
 def decode_medium(response):
@@ -68,9 +82,11 @@ class TapeChangeWatcher(QObject):
     ready = Signal()
     message = Signal(str)
 
-    def __init__(self, guid, parent=None):
+    def __init__(self, guid, parent=None, health=None):
         super().__init__(parent)
+        _watchers.add(self)
         self.guid = guid
+        self.health = health
         self.removed = False
         self.present_count = 0
         self.enabled = False
@@ -83,7 +99,7 @@ class TapeChangeWatcher(QObject):
         self.deadline = QTimer(self)
         self.deadline.setSingleShot(True)
         self.deadline.setInterval(3000)
-        self.deadline.timeout.connect(self.process.kill)
+        self.deadline.timeout.connect(self.timed_out)
 
     def start(self):
         self.enabled = True
@@ -93,16 +109,34 @@ class TapeChangeWatcher(QObject):
     def poll(self):
         if not self.enabled or self.process.state() != QProcess.ProcessState.NotRunning:
             return
+        if self.health:
+            device = next((d for d in discover() if d.guid == self.guid), None)
+            if device is None:
+                self.observe('disconnected')
+                return
+            try:
+                self.health.check(device)
+            except RuntimeError as exc:
+                self.stop()
+                self.message.emit(str(exc))
+                return
+        if blocked_firewire_tasks():
+            self.observe('unsupported')
+            return
         args = [] if getattr(sys, 'frozen', False) else ['-m', 'minidv_capture']
         self.process.start(sys.executable, args + ['--media-status', self.guid])
         self.deadline.start()
+
+    def timed_out(self):
+        # Never reopen the device after a timed-out driver call.
+        self.observe('unsupported')
 
     def finished(self, code, status):
         self.deadline.stop()
         result = bytes(self.process.readAllStandardOutput()).decode(errors='replace').strip()
         self.process.readAllStandardError()
         if self.enabled:
-            self.observe(result if code == 0 and status == QProcess.ExitStatus.NormalExit else 'unknown')
+            self.observe(result if code == 0 and status == QProcess.ExitStatus.NormalExit else 'unsupported')
 
     def process_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
@@ -138,4 +172,3 @@ class TapeChangeWatcher(QObject):
         self.deadline.stop()
         if self.process.state() != QProcess.ProcessState.NotRunning:
             self.process.kill()
-            self.process.waitForFinished(1000)

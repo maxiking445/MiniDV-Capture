@@ -132,3 +132,17 @@ can push the version commit and tag.
 
 This project was created with AI assistance. The maintainers are responsible
 for reviewing, testing and maintaining the code.
+
+
+### FireWire fault protection
+
+Capture now requires readable kernel logs through `journalctl`. Before capture,
+the app checks recent FireWire DMA/driver errors from the current boot, then
+monitors new errors asynchronously. An observed fault blocks that controller and
+stops its capture while keeping raw footage. Missing kernel-log access is shown
+as an error and prevents capture; it is not treated as a healthy device.
+
+This cannot repair a stuck kernel/controller or guarantee host stability. See
+[the FireWire investigation](docs/firewire-stability.md) for evidence, limits,
+and the next kernel/hardware comparisons. In manual mode, stop playback on the
+camera itself. The app no longer launches a separate AV/C STOP helper.

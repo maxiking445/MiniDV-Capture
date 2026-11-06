@@ -2,14 +2,14 @@ from pathlib import Path
 import json
 import re
 import time
-from PySide6.QtCore import Qt, QSettings, QTimer, QUrl, Signal, QSize
+from PySide6.QtCore import Qt, QSettings, QTimer, QUrl, Signal, QSize, QProcess
 from PySide6.QtGui import QDesktopServices, QIcon, QPixmap, QPainter, QColor
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QLineEdit, QFileDialog, QCheckBox, QSpinBox, QGroupBox,
     QFormLayout, QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,
     QMessageBox, QSystemTrayIcon, QSplitter, QAbstractItemView, QMenu, QStyle,
     QStackedWidget, QScrollArea, QButtonGroup)
-from .devices import discover
+from .devices import Device, discover
 from .capture import CaptureManager
 from .conversion import ConversionQueue, FORMATS, QUALITIES
 from .process import available
@@ -42,7 +42,10 @@ class MainWindow(QMainWindow):
         self.dialogs = []
         self.tape_watchers = {}
         self.retry_capture = None
+        self.health = None
         self.shutting_down = False
+        self.watchdog_armed = False
+        self.system_shutdown = False
         self.recovery = FireWireRecovery(self)
         self.recovery.finished.connect(self.recovery_finished)
         self.recovery_retry = None
@@ -585,7 +588,13 @@ class MainWindow(QMainWindow):
         if watcher:
             watcher.stop()
             watcher.message.emit(self.tr('Automatic start is off. Use Start next tape to continue.'))
-            watcher.deleteLater()
+            # A QProcess destructor waits for its child, even after SIGKILL.
+            # Keep a stuck helper alive until the application watchdog exits.
+            watcher.setParent(self)
+            if watcher.process.state() == QProcess.ProcessState.NotRunning:
+                watcher.deleteLater()
+            else:
+                watcher.process.finished.connect(watcher.deleteLater)
 
     def format_changed(self, *_):
         enabled = self.format.currentText() != 'AVI / DV lossless'
@@ -633,9 +642,6 @@ class MainWindow(QMainWindow):
             self.retry_capture_button.hide()
             self.save_settings()
         except (OSError, ValueError, RuntimeError) as exc:
-            if 'FireWire driver is blocked' in str(exc):
-                self.recover_firewire(device, lambda: self.start_capture(device=device, options_override=options))
-                return
             self.error(str(exc))
 
     def recover_firewire(self, device, retry):
@@ -909,11 +915,6 @@ class MainWindow(QMainWindow):
         try:
             self.captures.resume(job)
         except (OSError, RuntimeError, ValueError) as exc:
-            if 'FireWire driver is blocked' in str(exc):
-                device = next((d for d in self.devices if d.guid == job['device']['guid']), None)
-                if device:
-                    self.recover_firewire(device, lambda: self.resume_capture(job))
-                    return
             self.error(str(exc))
 
     def remove_history_job(self, job):
@@ -995,7 +996,13 @@ class MainWindow(QMainWindow):
         dialog.setWindowModality(Qt.WindowModality.NonModal)
         dialog.show()
         if job['options'].get('auto_next'):
-            watcher = TapeChangeWatcher(guid, dialog)
+            if self.health:
+                try:
+                    self.health.check(Device(**job['device']))
+                except RuntimeError as exc:
+                    dialog.setInformativeText(str(exc))
+                    return
+            watcher = TapeChangeWatcher(guid, dialog, health=self.health)
             self.tape_watchers[guid] = watcher
             watcher.message.connect(lambda text: dialog.setInformativeText(self.tr(text)))
             watcher.ready.connect(next_button.click)
@@ -1100,6 +1107,39 @@ class MainWindow(QMainWindow):
             self.settings.setValue(key, value)
         self.settings.sync()
 
+    def attach_health_monitor(self, health):
+        self.health = self.captures.health = health
+        health.fault.connect(self.firewire_fault)
+        health.unavailable.connect(lambda message: self.firewire_fault('', message))
+
+    def firewire_fault(self, address, message):
+        self.append_log(message)
+        self.capture_feedback.setText(message)
+        self.capture_feedback.show()
+        for guid in list(self.tape_watchers):
+            self.stop_tape_watcher(guid)
+        for session in self.captures.active():
+            if not address or Path(session.device.bus).name.lower() == address:
+                # A previous tape-end request must not queue suspect footage.
+                if session.reason:
+                    session.reason = 'error'
+                    session.job['error'] = message
+                else:
+                    session.stop('error', message)
+        self.refresh()
+
+    def request_system_shutdown(self):
+        self.system_shutdown = True
+        self.close()
+
+    def arm_shutdown_watchdog(self):
+        if not self.watchdog_armed:
+            self.watchdog_armed = True
+            self.shutdown_requested.emit([p.processId() for p in self.findChildren(QProcess)
+                                          if p.processId()])
+            if self.health:
+                self.health.stop()
+
     def closeEvent(self, event):
         if self.recovery.running:
             self.recovery_retry = None
@@ -1108,22 +1148,20 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         if self.captures.active() or self.queue.job:
-            dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Tasks running'),
-                self.tr('Cancel active tasks and quit? Partial files will be kept; queued jobs will resume next time.'),
-                QMessageBox.StandardButton.NoButton, self)
-            yes = dialog.addButton(self.tr('Yes'), QMessageBox.ButtonRole.AcceptRole)
-            no = dialog.addButton(self.tr('No'), QMessageBox.ButtonRole.RejectRole)
-            dialog.setDefaultButton(no)
-            dialog.exec()
+            accepted = self.system_shutdown
+            if not accepted:
+                dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Tasks running'),
+                    self.tr('Cancel active tasks and quit? Partial files will be kept; queued jobs will resume next time.'),
+                    QMessageBox.StandardButton.NoButton, self)
+                yes = dialog.addButton(self.tr('Yes'), QMessageBox.ButtonRole.AcceptRole)
+                no = dialog.addButton(self.tr('No'), QMessageBox.ButtonRole.RejectRole)
+                dialog.setDefaultButton(no)
+                dialog.exec()
+                accepted = dialog.clickedButton() == yes
             event.ignore()
-            if dialog.clickedButton() == yes:
+            if accepted:
                 self.shutting_down = True
-                processes = [s.process for s in self.captures.active()]
-                processes.extend(s.stop_process for s in self.captures.sessions.values())
-                processes.append(self.queue.process)
-                if self.preview.decoder:
-                    processes.append(self.preview.decoder)
-                self.shutdown_requested.emit([p.processId() for p in processes if p is not None])
+                self.arm_shutdown_watchdog()
                 self.scan_timer.stop()
                 self.live_blink_timer.stop()
                 self.record_step_timer.stop()
@@ -1145,6 +1183,7 @@ class MainWindow(QMainWindow):
                 self.shutdown_timer.start()
                 self.setEnabled(False)
             return
+        self.arm_shutdown_watchdog()
         self.save_settings()
         for guid in list(self.tape_watchers):
             self.stop_tape_watcher(guid)

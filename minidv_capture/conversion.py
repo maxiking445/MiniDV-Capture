@@ -2,11 +2,10 @@ from pathlib import Path
 from fractions import Fraction
 import json
 import os
-import subprocess
 import time
 import uuid
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
-from .process import executable, available, interrupt
+from .process import available, interrupt, start_background
 from .storage import Store, fingerprint, delete_verified_source
 from .preferences import english_options
 
@@ -60,15 +59,10 @@ def verify_metadata(source, result):
         raise ValueError('Audio streams, channels or sample rate missing/changed')
 
 
-def available_video_encoders():
-    """Return FFmpeg's compiled video encoder names without requiring a GPU."""
-    try:
-        result = subprocess.run([executable('ffmpeg'), '-hide_banner', '-encoders'],
-            capture_output=True, text=True, timeout=15, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return set()
+def parse_video_encoders(text):
+    """Parse the asynchronously collected encoder list without touching a GPU."""
     names = set()
-    for line in (result.stdout + result.stderr).splitlines():
+    for line in text.splitlines():
         columns = line.split()
         if len(columns) >= 2 and columns[0].startswith('V'):
             names.add(columns[1])
@@ -224,7 +218,7 @@ class ConversionQueue(QObject):
         self.process.finished.connect(self.finished)
         self.process.errorOccurred.connect(self.process_error)
         self.log.emit(f'{phase}: {program} ' + ' '.join(args))
-        self.process.start(executable(program), args)
+        start_background(self.process, program, args)
         self.changed.emit()
 
     def read_stdout(self):
@@ -266,7 +260,7 @@ class ConversionQueue(QObject):
             self.fail(self.process.errorString())
 
     def watchdog(self):
-        if self.job and self.process and time.monotonic() - self.last_output > (60 if self.phase.startswith('probe') else 600):
+        if self.job and self.process and not self.stopping and time.monotonic() - self.last_output > (15 if self.phase == 'list-encoders' else 60 if self.phase.startswith('probe') else 600):
             self.stderr_tail += '\nProcess stalled; timeout exceeded.'
             self.stopping = True
             interrupt(self.process)
@@ -298,9 +292,11 @@ class ConversionQueue(QObject):
                 self.source_probe = json.loads(bytes(self.buffer))
                 if not video(self.source_probe) or duration(self.source_probe) <= 0:
                     raise ValueError('Raw capture contains no valid video')
+                self.run('list-encoders', 'ffmpeg', ['-hide_banner', '-encoders'])
+            elif self.phase == 'list-encoders':
                 fmt = english_options(self.job['options'])['format']
                 deinterlace = self.job['options'].get('deinterlace', True)
-                self.encoder_candidates = video_encoder_candidates(fmt, available_video_encoders(),
+                self.encoder_candidates = video_encoder_candidates(fmt, parse_video_encoders(bytes(self.buffer).decode(errors='replace')),
                     self.source_probe, deinterlace)
                 self.encoder_index = 0
                 encoder = self.encoder_candidates[self.encoder_index]

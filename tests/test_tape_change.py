@@ -50,6 +50,26 @@ class TapeChangeTests(unittest.TestCase):
         self.watcher.observe('present')
         self.assertFalse(self.starts)
 
+    def test_timeout_disables_polling_without_waiting_for_driver(self):
+        from PySide6.QtCore import QProcess
+        with patch.object(self.watcher.process, 'state', return_value=QProcess.ProcessState.Running), \
+                patch.object(self.watcher.process, 'kill') as kill, \
+                patch.object(self.watcher.process, 'waitForFinished') as wait, \
+                patch.object(self.watcher.process, 'start') as start:
+            self.watcher.timed_out()
+            self.watcher.poll()
+        kill.assert_called_once()
+        wait.assert_not_called()
+        start.assert_not_called()
+        self.assertFalse(self.watcher.enabled)
+
+    def test_blocked_driver_disables_queries(self):
+        with patch('minidv_capture.tape_change.blocked_firewire_tasks', return_value=['42']), \
+                patch.object(self.watcher.process, 'start') as start:
+            self.watcher.poll()
+        start.assert_not_called()
+        self.assertFalse(self.watcher.enabled)
+
     def test_medium_responses_require_correct_stable_status(self):
         self.assertEqual(decode_medium(0x0c20da32), 'present')
         self.assertEqual(decode_medium(0x0c20da60), 'absent')

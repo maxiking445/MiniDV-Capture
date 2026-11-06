@@ -53,6 +53,12 @@ def interrupt(process: QProcess):
     """SIGINT lets dvgrab/FFmpeg close files. Kill only this process on timeout."""
     if process.state() == QProcess.ProcessState.NotRunning:
         return
+    if process.state() == QProcess.ProcessState.Starting:
+        def stop_when_started():
+            process.started.disconnect(stop_when_started)
+            interrupt(process)
+        process.started.connect(stop_when_started)
+        return
     pid = process.processId()
     if pid:
         try:
@@ -65,3 +71,11 @@ def interrupt(process: QProcess):
                           and process.processId() == pid else None)
     process.finished.connect(timer.stop)
     timer.start(5000)
+
+
+def start_background(process: QProcess, program: str, args):
+    """Give capture and the desktop precedence over conversion CPU work."""
+    if available('nice'):
+        process.start(executable('nice'), ['-n', '10', executable(program), *args])
+    else:
+        process.start(executable(program), args)

@@ -3,11 +3,11 @@ import os
 import shutil
 import time
 import uuid
-import sys
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 from .devices import Device, discover, blocked_firewire_tasks
 from .process import available, executable, interrupt
 from .storage import Store
+from .tape_change import pending_queries
 
 
 def capture_arguments(device: Device, manual: bool, directory: Path, rewind=False, broadcast=False,
@@ -64,34 +64,23 @@ class CaptureSession(QObject):
         self.log_tail = ''
         self.logfile = Path(job['directory']) / 'capture.log'
         self.process_started_ok = False
-        self.stop_process = QProcess(self)
         self.stop_deadline = QTimer(self)
         self.stop_deadline.setSingleShot(True)
-        self.stop_deadline.setInterval(3000)
-        self.stop_deadline.timeout.connect(self.transport_stop_timeout)
-        self.stop_process.finished.connect(self.transport_stopped)
+        self.stop_deadline.setInterval(7000)
+        self.stop_deadline.timeout.connect(self.stop_timed_out)
 
-    def stop_transport(self):
-        if not self.process_started_ok:
+    def stop_timed_out(self):
+        if self.process.state() == QProcess.ProcessState.NotRunning:
             return
-        args = [] if getattr(sys, 'frozen', False) else ['-m', 'minidv_capture']
-        self._write_log('Requesting camcorder STOP via AV/C')
-        self.stop_process.start(sys.executable, args + ['--transport-stop', self.device.guid])
-        self.stop_deadline.start()
-
-    def transport_stop_timeout(self):
-        self.stop_process.kill()
-        message = 'Camcorder STOP timed out. Stop playback on the camera if it is still running.'
+        message = ('Capture process did not exit after interruption and forced termination. '
+                   'FireWire may be blocked. No new capture will start on this bus. '
+                   'Stop playback and power off the camera. Raw footage is kept; you can close the app.')
         self._write_log(message)
         self.log.emit(message)
-
-    def transport_stopped(self, code, status):
-        self.stop_deadline.stop()
-        result = bytes(self.stop_process.readAllStandardOutput()).decode(errors='replace').strip()
-        message = ('Camcorder acknowledged STOP.' if code == 0 and result == 'stopped' else
-                   'Camcorder STOP was not confirmed. Stop playback on the camera if it is still running.')
-        self._write_log(message)
-        self.log.emit(message)
+        # Keep the bus reserved and footage unavailable for conversion/deletion
+        # until the child really exits. A timeout is not a completed capture.
+        self.store.update(self.job, error=message, capture_incomplete=True)
+        self.changed.emit()
 
     @property
     def active(self):
@@ -167,12 +156,16 @@ class CaptureSession(QObject):
         if self.finished_once or self.reason:
             return
         self.reason = reason
-        self.stop_transport()
+        # dvgrab owns transport shutdown in automatic mode. Opening another
+        # raw1394 handle here can wedge alongside its release in the kernel.
+        if self.manual:
+            self.log.emit('Stop playback on the camera; manual mode does not send AV/C STOP.')
         self.job['error'] = error
         self.timer.stop()
         self._write_log(f'Stopping capture: reason={reason}; {error or "no additional error"}')
         self.log.emit(f'Stopping capture: {reason}' + (f' ({error})' if error else ''))
         interrupt(self.process)
+        self.stop_deadline.start()
 
     def process_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
@@ -184,11 +177,10 @@ class CaptureSession(QObject):
     def finished(self, code, status):
         if self.finished_once:
             return
-        if not self.reason:
-            self.stop_transport()
         self.read_log()
         self._write_log(f'dvgrab exited: code={code}; status={status}; requested_stop={self.reason or "none"}')
         self.finished_once = True
+        self.stop_deadline.stop()
         self.timer.stop()
         segments = list(Path(self.job['directory']).glob(self.output_name + '*.dv'))
         self.bytes = sum(part.stat().st_size for part in segments if part.is_file())
@@ -229,6 +221,7 @@ class CaptureManager(QObject):
         super().__init__(parent)
         self.store = store
         self.sessions = {}
+        self.health = None
 
     def active(self):
         return [s for s in self.sessions.values() if s.active]
@@ -240,6 +233,8 @@ class CaptureManager(QObject):
         fresh = {d.guid: d for d in discover()}.get(device.guid)
         if fresh is None:
             raise RuntimeError('Camera disconnected.')
+        if self.health is not None:
+            self.health.check(fresh)
         if not fresh.accessible:
             raise RuntimeError('No read/write access to ' + fresh.node + '. Enable device access through Setup.')
         # Manual broadcast reception cannot isolate two senders on the same bus.
@@ -279,6 +274,8 @@ class CaptureManager(QObject):
         device = next((d for d in discover() if d.guid == job['device']['guid']), None)
         if device is None:
             raise RuntimeError('The original camera is not connected. Connect it over FireWire and rescan.')
+        if self.health is not None:
+            self.health.check(device)
         if not device.accessible:
             raise RuntimeError('No read/write access to ' + device.node + '. Enable device access through Setup.')
         if any(s.active and (s.device.guid == device.guid or s.device.bus == device.bus) for s in self.sessions.values()):
@@ -300,6 +297,8 @@ class CaptureManager(QObject):
         return session
 
     def check_transport_stopped(self, device):
+        if self.health is not None:
+            self.health.check(device)
         blocked = blocked_firewire_tasks()
         if blocked:
             raise RuntimeError(
@@ -307,7 +306,5 @@ class CaptureManager(QObject):
                 + ', '.join(blocked) + '). No new capture was started. '
                 'Stop playback and power off the camera. If the driver remains blocked, '
                 'restart the computer before retrying. Existing recordings are kept.')
-        for session in self.sessions.values():
-            if (session.device.bus == device.bus and
-                    session.stop_process.state() != QProcess.ProcessState.NotRunning):
-                raise RuntimeError('Waiting for camcorder STOP to finish. Please retry shortly.')
+        if pending_queries():
+            raise RuntimeError('Waiting for cassette detection to release FireWire. Please retry shortly.')

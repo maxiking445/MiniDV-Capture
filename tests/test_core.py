@@ -207,6 +207,34 @@ class CaptureTests(Base):
     def running(self, extra=''):
         return self.session('import sys,time,signal\nsignal.signal(signal.SIGINT,lambda *a:sys.exit(0))\nopen(sys.argv[1],"wb").write(b"DV"*72000)\n' + extra + '\ntime.sleep(30)\n')
 
+    def test_stop_never_launches_another_firewire_process(self):
+        s = self.running()
+        wait_until(lambda: Path(s.job['raw']).exists())
+        with patch('minidv_capture.capture.QProcess.start') as start:
+            s.stop('cancel')
+            wait_until(lambda: s.finished_once)
+        start.assert_not_called()
+
+    def test_stop_while_process_is_starting(self):
+        s = self.session('import time; time.sleep(30)')
+        s.stop('cancel')
+        wait_until(lambda: s.finished_once, timeout=8)
+        self.assertEqual(s.job['state'], 'cancelled')
+
+    def test_stuck_stop_keeps_bus_reserved_and_does_not_complete(self):
+        from PySide6.QtCore import QProcess
+        s = CaptureSession(self.store, self.job(), DEVICE)
+        completed = []
+        s.completed.connect(completed.append)
+        with patch.object(s.process, 'state', return_value=QProcess.ProcessState.Running):
+            s.stop_timed_out()
+        self.assertTrue(s.active)
+        self.assertFalse(completed)
+        self.assertEqual(s.job['state'], 'capturing')
+        self.assertTrue(s.job['capture_incomplete'])
+        self.assertIn('did not exit', s.job['error'])
+        s.deleteLater()
+
     def test_stop_queues_and_signals_next_tape(self):
         s = self.running(); done = []; s.completed.connect(done.append)
         wait_until(lambda: Path(s.job['raw']).exists())
@@ -284,6 +312,18 @@ class ConversionTests(Base):
         Path(job['raw']).write_bytes(self.sample.read_bytes())
         self.store.update(job, state='queued')
         return job
+
+    def test_encoder_discovery_is_an_async_queue_phase(self):
+        queue = self.queue()
+        queue.job = self.enqueue()
+        queue.phase = 'probe-source'
+        queue.buffer.extend(json.dumps({'format': {'duration': '1'},
+            'streams': [{'codec_type': 'video', 'codec_name': 'dvvideo'}]}).encode())
+        from PySide6.QtCore import QProcess
+        with patch.object(queue, 'run') as run:
+            queue.finished(0, QProcess.ExitStatus.NormalExit)
+        run.assert_called_once_with('list-encoders', 'ffmpeg', ['-hide_banner', '-encoders'])
+        queue.job = None
 
     def test_hardware_encoder_is_preferred_with_cpu_fallback(self):
         source = {'streams': [{'codec_type': 'video', 'field_order': 'progressive'}]}

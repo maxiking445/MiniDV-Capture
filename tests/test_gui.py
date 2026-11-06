@@ -37,6 +37,66 @@ class GuiTests(unittest.TestCase):
         APP.processEvents()
         self.temp.cleanup()
 
+    def test_kernel_fault_stops_capture_and_overrides_pending_completion(self):
+        job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
+        session = CaptureSession(self.store, job, DEVICE, self.window.captures)
+        self.window.captures.sessions[DEVICE.guid] = session
+        try:
+            with patch.object(session, 'stop') as stop:
+                self.window.firewire_fault(Path(DEVICE.bus).name, 'DMA fault')
+            stop.assert_called_once_with('error', 'DMA fault')
+            session.reason = 'complete'
+            self.window.firewire_fault(Path(DEVICE.bus).name, 'DMA fault')
+            self.assertEqual(session.reason, 'error')
+            self.assertEqual(job['error'], 'DMA fault')
+        finally:
+            session.finished_once = True
+
+    def test_idle_exit_also_arms_watchdog(self):
+        calls = []
+        self.window.shutdown_requested.connect(calls.append)
+        self.window.close()
+        self.assertEqual(calls, [[]])
+
+    def test_system_shutdown_does_not_wait_for_confirmation(self):
+        job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
+        session = CaptureSession(self.store, job, DEVICE, self.window.captures)
+        self.window.captures.sessions[DEVICE.guid] = session
+        try:
+            with patch('minidv_capture.gui.QMessageBox.exec') as prompt:
+                self.window.request_system_shutdown()
+            prompt.assert_not_called()
+            self.assertTrue(self.window.shutting_down)
+            self.assertTrue(self.window.watchdog_armed)
+            self.assertEqual(session.reason, 'cancel')
+        finally:
+            session.finished_once = True
+            self.window.finish_shutdown()
+
+    def test_blocked_capture_does_not_reset_controller(self):
+        with patch('minidv_capture.gui.available', return_value=True), \
+                patch.object(self.window.captures, 'start', side_effect=RuntimeError('FireWire driver is blocked')), \
+                patch.object(self.window.recovery, 'start') as reset, \
+                patch.object(self.window, 'error') as error:
+            self.window.start_capture(device=DEVICE)
+        reset.assert_not_called()
+        error.assert_called_once()
+
+    def test_stuck_watcher_is_not_destroyed_with_dialog(self):
+        from PySide6.QtCore import QProcess
+        from minidv_capture.tape_change import TapeChangeWatcher
+        dialog = QMessageBox(self.window)
+        watcher = TapeChangeWatcher(DEVICE.guid, dialog)
+        self.window.tape_watchers[DEVICE.guid] = watcher
+        with patch.object(watcher.process, 'state', return_value=QProcess.ProcessState.Running), \
+                patch.object(watcher.process, 'kill'), \
+                patch.object(watcher, 'deleteLater') as destroy:
+            self.window.stop_tape_watcher(DEVICE.guid)
+        self.assertIs(watcher.parent(), self.window)
+        destroy.assert_not_called()
+        dialog.deleteLater()
+        watcher.deleteLater()
+
     def test_default_manual_and_no_delete(self):
         self.assertTrue(self.window.options()['manual'])
         self.assertFalse(self.window.options()['delete_raw'])

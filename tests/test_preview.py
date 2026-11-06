@@ -1,5 +1,6 @@
 import subprocess
 import time
+from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 from PySide6.QtCore import QProcess
@@ -45,14 +46,39 @@ class PreviewTests(Base):
                     self.assertLess(color.green(), 40)
                     self.assertEqual(raw.read_bytes(), data + b'partial')
                     process = preview.decoder
+                    exited = []
+                    process.finished.connect(lambda *_: exited.append(True))
                     session.active = False
                     preview.poll()
                     self.assertIsNone(preview.decoder)
-                    self.assertEqual(process.state(), QProcess.ProcessState.NotRunning)
+                    wait_until(lambda: bool(exited))
                     self.assertFalse(preview.timer.isActive())
                 finally:
                     preview.stop()
                     preview.deleteLater()
+
+    def test_retained_decoder_blocks_repeated_restarts(self):
+        preview = LivePreview()
+        old = QProcess(preview)
+        with patch.object(old, 'state', return_value=QProcess.ProcessState.Running):
+            for _ in range(20):
+                preview.start_decoder()
+        self.assertIsNone(preview.decoder)
+        self.assertEqual(len(preview.findChildren(QProcess)), 1)
+        preview.deleteLater()
+
+    def test_stuck_decoder_is_retained_without_waiting(self):
+        preview = LivePreview()
+        process = Mock()
+        process.state.return_value = QProcess.ProcessState.Running
+        preview.decoder = process
+        preview.stop()
+        process.kill.assert_called_once()
+        process.waitForFinished.assert_not_called()
+        process.deleteLater.assert_not_called()
+        process.finished.connect.assert_called_once_with(process.deleteLater)
+        self.assertIsNone(preview.decoder)
+        preview.deleteLater()
 
     def test_switching_sessions_clears_old_picture_and_position(self):
         preview = LivePreview()

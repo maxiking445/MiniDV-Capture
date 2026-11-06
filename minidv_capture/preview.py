@@ -56,6 +56,9 @@ class LivePreview(QWidget):
             self.timer.start()
 
     def start_decoder(self):
+        # Do not accumulate decoders when a previous one cannot exit.
+        if any(p.state() != QProcess.ProcessState.NotRunning for p in self.findChildren(QProcess)):
+            return
         process = QProcess(self)
         self.decoder = process
         process.setProgram(executable('ffmpeg'))
@@ -100,7 +103,7 @@ class LivePreview(QWidget):
                     return
                 if self.decoder is None:
                     self.start_decoder()
-                if self.decoder.state() != QProcess.ProcessState.Running:
+                if self.decoder is None or self.decoder.state() != QProcess.ProcessState.Running:
                     return
                 # Never let a slow preview queue up captured video in memory.
                 if self.decoder.bytesToWrite() > frame_size * 2:
@@ -141,10 +144,14 @@ class LivePreview(QWidget):
         self.timer.stop()
         process, self.decoder = self.decoder, None
         if process:
-            process.blockSignals(True)
-            process.kill()
-            process.waitForFinished(1000)
-            process.deleteLater()
+            process.readyReadStandardOutput.disconnect(self.read_image)
+            if process.state() == QProcess.ProcessState.NotRunning:
+                process.deleteLater()
+            else:
+                # Keep ownership until exit: deleting a live QProcess can wait
+                # indefinitely if even FFmpeg is stuck in kernel I/O.
+                process.finished.connect(process.deleteLater)
+                process.kill()
         self.session = None
         self.buffer.clear()
         self.pixmap = QPixmap()

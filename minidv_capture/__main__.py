@@ -2,9 +2,11 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 import sys
+import signal
 from PySide6.QtCore import QLockFile, QStandardPaths, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 from .storage import Store
+from .firewire_health import FireWireHealth
 from .gui import MainWindow, apply_theme
 from .process import available, start_shutdown_watchdog
 
@@ -55,10 +57,23 @@ def main():
         return 1
     apply_theme(app)
     window = MainWindow(store)
+    health = FireWireHealth(window)
+    window.attach_health_monitor(health)
+    health.fault.connect(lambda address, message: logging.error(message))
+    health.unavailable.connect(logging.warning)
+    health.start()
     window.quit_requested.connect(app.quit)
     window.shutdown_requested.connect(start_shutdown_watchdog)
     window.captures.log.connect(logging.info)
     window.queue.log.connect(logging.info)
+    # Cover desktop logout and SIGTERM as well as the window's Quit action.
+    app.commitDataRequest.connect(lambda manager: window.request_system_shutdown())
+    app.aboutToQuit.connect(window.arm_shutdown_watchdog)
+    signal.signal(signal.SIGTERM, lambda *_: window.request_system_shutdown())
+    signal.signal(signal.SIGINT, lambda *_: window.request_system_shutdown())
+    signal_timer = QTimer(app)
+    signal_timer.timeout.connect(lambda: None)
+    signal_timer.start(250)  # Give Python pending signals time outside Qt's wait.
     window.show()
     if smoke_test:
         QTimer.singleShot(500, lambda: app.exit(smoke_exit_code))

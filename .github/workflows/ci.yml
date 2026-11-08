@@ -16,14 +16,7 @@ concurrency:
 jobs:
   test:
     name: Tests and GUI smoke test
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            python: "3.10"
-          - os: ubuntu-24.04
-            python: "3.12"
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       QT_QPA_PLATFORM: offscreen
@@ -34,7 +27,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python }}
+          python-version: '3.12'
 
       - name: Install system media and Qt libraries
         run: |
@@ -53,7 +46,6 @@ jobs:
         run: timeout --kill-after=5s 30s python -m minidv_capture --smoke-test
 
       - name: Build and smoke test the frozen application
-        if: matrix.os == 'ubuntu-24.04'
         timeout-minutes: 10
         run: ./packaging/build-appimage.sh --onedir-only
 
@@ -61,7 +53,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: ci-packaging-diagnostics-${{ matrix.os }}
+          name: ci-packaging-diagnostics
           path: |
             build/smoke.*/
             build/minidv-capture/warn-*.txt

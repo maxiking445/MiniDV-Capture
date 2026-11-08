@@ -173,7 +173,13 @@ class StorageTests(Base):
     def test_no_delete_changed(self):
         for field in ('raw', 'output'):
             job = self.verified()
-            Path(job[field]).write_bytes(b'changed')
+            path = Path(job[field])
+            before = path.stat()
+            path.write_bytes(b'changed')
+            # "checked" and "changed" have equal lengths. Fast writes can
+            # share an mtime on CI filesystems; exercise the metadata guard
+            # with a deterministic timestamp change, not a timing assumption.
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000_000))
             with self.assertRaises(ValueError):
                 delete_verified_source(job)
             self.assertTrue(Path(job['raw']).exists())
@@ -506,8 +512,25 @@ class ConversionTests(Base):
                 queue = self.queue(); queue.pump()
                 wait_until(lambda: job['state'] in {'done', 'conversion_error'}, 45)
                 self.assertEqual(job['state'], 'done', job['error'])
-                probe = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_streams', '-of', 'json', job['output']]))
-                self.assertIn(probe['streams'][0]['field_order'], ('bb', 'bt'))
+                stream_probe = json.loads(subprocess.check_output([
+                    'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                    '-show_streams', '-of', 'json', job['output']]))
+                declared = stream_probe['streams'][0].get('field_order', 'unknown')
+                if declared != 'unknown':
+                    self.assertIn(declared, ('bb', 'bt'))
+                    continue
+                # Older FFmpeg versions may omit H.264 stream field_order.
+                # Check decoded frames directly: missing metadata must not
+                # either fail a valid encode or silently pass progressive video.
+                probe = json.loads(subprocess.check_output([
+                    'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                    '-show_frames', '-show_entries',
+                    'frame=interlaced_frame,top_field_first', '-of', 'json', job['output']]))
+                frames = probe.get('frames', [])
+                self.assertTrue(frames, 'No decoded video frames')
+                for frame in frames:
+                    self.assertEqual(frame.get('interlaced_frame'), 1, frame)
+                    self.assertEqual(frame.get('top_field_first'), 0, frame)
 
     def test_delete_after_verification(self):
         job = self.enqueue(delete_raw=True)

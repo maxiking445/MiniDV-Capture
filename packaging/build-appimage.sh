@@ -7,7 +7,7 @@ if [[ $# -gt 1 || ($# -eq 1 && $1 != --onedir-only) ]]; then
 fi
 project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
-for tool in python dvgrab ffmpeg ffprobe curl timeout; do
+for tool in python dvgrab ffmpeg ffprobe curl timeout rsvg-convert; do
     command -v "$tool" >/dev/null || { printf 'Build-Abhängigkeit fehlt: %s\n' "$tool" >&2; exit 1; }
 done
 [[ $(uname -m) == x86_64 ]] || { echo 'Dieser Build ist für x86_64 vorgesehen.' >&2; exit 1; }
@@ -32,7 +32,9 @@ mkdir -p "$appdir/usr/lib/minidv-capture" "$appdir/usr/share/licenses"
 cp -a dist/minidv-capture/. "$appdir/usr/lib/minidv-capture/"
 cp packaging/minidv-capture.desktop "$appdir/"
 cp assets/minidv-capture.svg "$appdir/"
-cp assets/minidv-capture.svg "$appdir/.DirIcon"
+rsvg-convert --format=png --width=256 --height=256 \
+    --output="$appdir/minidv-capture.png" assets/minidv-capture.svg
+cp "$appdir/minidv-capture.png" "$appdir/.DirIcon"
 for package in python pyside6 python-pyside6 qt6-base qt6-svg qt6-wayland ffmpeg dvgrab; do
     if [[ -d "/usr/share/licenses/$package" ]]; then
         cp -a "/usr/share/licenses/$package" "$appdir/usr/share/licenses/"
@@ -71,11 +73,38 @@ smoke_test "$appdir/AppRun"
 if [[ ${1:-} == --onedir-only ]]; then exit 0; fi
 appimage_tool="${APPIMAGETOOL:-$project_dir/build/appimagetool-x86_64.AppImage}"
 if [[ ! -x "$appimage_tool" ]]; then
-    curl --fail --location --retry 2 --connect-timeout 15 --max-time 180 --output "$appimage_tool" \
+    download_tmp="$appimage_tool.part.$$"
+    trap 'rm -f -- "${download_tmp:-}"' EXIT
+    curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 15 --max-time 300 --output "$download_tmp" \
         https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+    [[ $(head -c 4 "$download_tmp") == $'\x7fELF' ]] || {
+        echo 'Downloaded appimagetool is not an ELF executable.' >&2
+        exit 1
+    }
+    chmod +x "$download_tmp"
+    mv -f -- "$download_tmp" "$appimage_tool"
+    trap - EXIT
     chmod +x "$appimage_tool"
 fi
-ARCH=x86_64 "$appimage_tool" --appimage-extract-and-run "$appdir" "$project_dir/dist/MiniDV-Capture-x86_64.AppImage"
+runtime_file="${APPIMAGETOOL_RUNTIME_FILE:-$project_dir/build/runtime-x86_64}"
+if [[ ! -s "$runtime_file" ]]; then
+    runtime_tmp="$runtime_file.part.$$"
+    trap 'rm -f -- "${runtime_tmp:-}"' EXIT
+    curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 15 --max-time 300 --output "$runtime_tmp" \
+        https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64
+    [[ $(head -c 4 "$runtime_tmp") == $'\x7fELF' ]] || {
+        echo 'Downloaded AppImage runtime is not an ELF executable.' >&2
+        exit 1
+    }
+    chmod +x "$runtime_tmp"
+    mv -f -- "$runtime_tmp" "$runtime_file"
+    trap - EXIT
+fi
+[[ -x "$runtime_file" ]] || chmod +x "$runtime_file"
+ARCH=x86_64 "$appimage_tool" --appimage-extract-and-run --runtime-file "$runtime_file" \
+    "$appdir" "$project_dir/dist/MiniDV-Capture-x86_64.AppImage"
 smoke_test "$project_dir/dist/MiniDV-Capture-x86_64.AppImage" --appimage-extract-and-run
 sha256sum dist/MiniDV-Capture-x86_64.AppImage > dist/MiniDV-Capture-x86_64.AppImage.sha256
 printf '\nFertig: %s/dist/MiniDV-Capture-x86_64.AppImage\n' "$project_dir"

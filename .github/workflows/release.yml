@@ -80,7 +80,7 @@ jobs:
       - name: Install AppImage build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes dvgrab ffmpeg libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxkbcommon-x11-0
+          sudo apt-get install --yes dvgrab ffmpeg librsvg2-bin libegl1 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxkbcommon-x11-0
 
       - name: Build and smoke test the single-file AppImage
         timeout-minutes: 15

@@ -132,7 +132,7 @@ Run the test suite with `.venv/bin/python -m unittest discover -s tests -v`.
 
 ### Build packages
 
-On x86_64, install `curl`, `dpkg`, `dvgrab`, `ffmpeg` and `ffprobe`, then run:
+On x86_64, install `curl`, `dpkg`, `dvgrab`, `ffmpeg`, `ffprobe` and `librsvg2-bin`, then run:
 
 ```bash
 ./packaging/build-appimage.sh

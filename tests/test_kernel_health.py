@@ -7,14 +7,14 @@ from PySide6.QtCore import QProcess
 from minidv_capture.firewire_health import FireWireHealth
 from test_core import APP, DEVICE
 
-DMA_FAULT = 'firewire_ohci 0000:06:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x0011 address=0xffeeb000 flags=0x0050]'
-FAULT = 'firewire_ohci 0000:06:00.0: DMA context still active (0x40000411)'
+DMA_FAULT = 'firewire_ohci 0000:03:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT domain=0x0011 address=0xffeeb000 flags=0x0050]'
+FAULT = 'firewire_ohci 0000:03:00.0: DMA context still active (0x40000411)'
 
 
 class KernelHealthTests(unittest.TestCase):
     def setUp(self):
         self.health = FireWireHealth()
-        self.device = replace(DEVICE, bus='/sys/devices/pci0000:00/0000:06:00.0')
+        self.device = replace(DEVICE, bus='/sys/devices/pci0000:00/0000:03:00.0')
 
     def tearDown(self):
         self.health.stop()
@@ -101,15 +101,15 @@ class KernelHealthTests(unittest.TestCase):
             self.health.check(self.device)
 
     def test_normal_messages_and_other_devices_are_not_firewire_faults(self):
-        for line in ['firewire_ohci 0000:06:00.0: added OHCI v1.0 device',
+        for line in ['firewire_ohci 0000:03:00.0: added OHCI v1.0 device',
                      'nvme 0000:02:00.0: AMD-Vi: Event logged [IO_PAGE_FAULT]',
-                     'firewire_core 0000:06:00.0: failed to allocate broadcast channel']:
+                     'firewire_core 0000:03:00.0: failed to allocate broadcast channel']:
             self.health.observe(line)
         self.assertFalse(self.health.faults)
 
     def test_dma_stall_is_detected_without_iommu_error(self):
-        self.health.observe('firewire_ohci 0000:06:00.0: DMA context still active (0x40000411)')
-        self.assertIn('0000:06:00.0', self.health.faults)
+        self.health.observe('firewire_ohci 0000:03:00.0: DMA context still active (0x40000411)')
+        self.assertIn('0000:03:00.0', self.health.faults)
 
     def test_snapshot_is_current_boot_bounded_and_has_timeout(self):
         with patch.object(self.health.process, 'start') as start:
@@ -147,7 +147,7 @@ class KernelHealthTests(unittest.TestCase):
             self.health.read_output()
             self.assertFalse(self.health.faults)
             self.health.read_output()
-            self.assertIn('0000:06:00.0', self.health.faults)
+            self.assertIn('0000:03:00.0', self.health.faults)
             self.health.read_output()
             self.assertLessEqual(len(self.health.buffer), 8192)
 

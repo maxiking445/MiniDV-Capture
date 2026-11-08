@@ -27,7 +27,7 @@ class RecoveryTests(unittest.TestCase):
         process.wait.side_effect = subprocess.TimeoutExpired('recovery', 45)
         with patch('minidv_capture.recovery.subprocess.Popen', return_value=process), \
                 patch('minidv_capture.recovery.installed_service', return_value=False):
-            recovery.run('0000:06:00.0')
+            recovery.run('0000:03:00.0')
         process.kill.assert_called_once()
         process.wait.assert_called_once_with(timeout=45)
         self.assertFalse(results[0][0])
@@ -45,7 +45,7 @@ class ControllerRestartTests(unittest.TestCase):
         self.pci = self.root / 'devices'
         self.driver = self.root / 'drivers/firewire_ohci'
         self.driver.mkdir(parents=True)
-        self.device = self.pci / '0000:06:00.0'
+        self.device = self.pci / '0000:03:00.0'
         self.device.mkdir(parents=True)
         (self.device / 'class').write_text('0x0c0010')
         (self.device / 'reset_method').write_text('pm bus')
@@ -119,7 +119,7 @@ class ControllerRestartTests(unittest.TestCase):
         results = []
         recovery.finished.connect(lambda ok, message: results.append(ok))
         with patch('minidv_capture.recovery.threading.Thread') as thread:
-            recovery.start('0000:06:00.0')
+            recovery.start('0000:03:00.0')
         thread.assert_not_called()
         self.assertEqual(results, [False])
         recovery.deleteLater()
@@ -187,15 +187,15 @@ class RestartClientChecks(unittest.TestCase):
 class RecoveryServicePolicyTests(unittest.TestCase):
     def test_policy_authorizes_only_fixed_unit_start_for_active_local_owner(self):
         installer = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts/install-recovery-service.py'))
-        unit, policy = installer['service_files']('0000:06:00.0', 1000, 'max')
-        self.assertIn('subject.user === "max" && subject.local && subject.active', policy)
+        unit, policy = installer['service_files']('0000:03:00.0', 1000, 'testuser')
+        self.assertIn('subject.user === "testuser" && subject.local && subject.active', policy)
         self.assertIn('action.lookup("unit") === "minidv-firewire-recover.service"', policy)
         self.assertIn('action.lookup("verb") === "start"', policy)
         self.assertIn('Environment=PKEXEC_UID=1000', unit)
-        self.assertIn('0000:06:00.0 --restart', unit)
+        self.assertIn('0000:03:00.0 --restart', unit)
         self.assertNotIn('[Install]', unit)
-        for address, uid, user in [('bad', 1000, 'max'), ('0000:06:00.0', 0, 'root'),
-                                   ('0000:06:00.0', 1000, 'x"; evil')]:
+        for address, uid, user in [('bad', 1000, 'testuser'), ('0000:03:00.0', 0, 'root'),
+                                   ('0000:03:00.0', 1000, 'x"; evil')]:
             with self.assertRaises(ValueError):
                 installer['service_files'](address, uid, user)
 
@@ -206,7 +206,7 @@ class RecoveryServicePolicyTests(unittest.TestCase):
         with patch('minidv_capture.recovery.installed_service', return_value=True), \
                 patch('minidv_capture.recovery.subprocess.Popen', return_value=process) as popen, \
                 patch('minidv_capture.recovery.Path.read_text', return_value='Controller reinitialized'):
-            recovery.run('0000:06:00.0')
+            recovery.run('0000:03:00.0')
         self.assertEqual(popen.call_args.args[0], ['systemctl', 'start', 'minidv-firewire-recover.service'])
         process.wait.assert_called_once_with(timeout=60)
         recovery.deleteLater()
@@ -218,3 +218,37 @@ class RecoveryServicePolicyTests(unittest.TestCase):
         recovery.process.kill.assert_not_called()
         self.assertTrue(recovery.cancelled.is_set())
         recovery.deleteLater()
+
+
+class RecoveryPortabilityTests(unittest.TestCase):
+    def setUp(self):
+        self.installer = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'scripts/install-recovery-service.py'))
+
+    def test_target_uses_calling_user_and_detected_controller(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory, patch.dict('os.environ', {'PKEXEC_UID': '1234'}, clear=True):
+            pci = Path(directory)
+            device = pci / '0000:03:00.0'
+            device.mkdir()
+            (device / 'class').write_text('0x0c0010')
+            self.assertEqual(self.installer['installation_target'](pci=pci), ('0000:03:00.0', 1234))
+            other = pci / '0000:04:00.0'
+            other.mkdir()
+            (other / 'class').write_text('0x0c0010')
+            with self.assertRaisesRegex(RuntimeError, 'exactly one'):
+                self.installer['installation_target'](pci=pci)
+
+    def test_root_invocation_requires_explicit_desktop_owner(self):
+        with patch.dict('os.environ', {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, '--owner'):
+                self.installer['installation_target']('0000:03:00.0')
+        with patch.dict('os.environ', {'SUDO_UID': '1234'}, clear=True):
+            self.assertEqual(self.installer['installation_target']('0000:03:00.0'), ('0000:03:00.0', 1234))
+
+    def test_old_ubuntu_polkit_is_rejected_before_installation(self):
+        with patch.object(Path, 'is_dir', return_value=True), patch('subprocess.run', return_value=Mock(stdout='pkaction version 0.105\n')):
+            with self.assertRaisesRegex(RuntimeError, 'polkit >= 0.106'):
+                self.installer['check_service_support']()
+        for version in ('0.106', '124', '127'):
+            with self.subTest(version=version), patch.object(Path, 'is_dir', return_value=True), patch('subprocess.run', return_value=Mock(stdout=f'pkaction version {version}\n')):
+                self.installer['check_service_support']()

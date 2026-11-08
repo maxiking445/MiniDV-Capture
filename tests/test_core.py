@@ -17,7 +17,7 @@ from minidv_capture.conversion import (ConversionQueue, FORMATS, verify_metadata
     video_encoder_candidates, conversion_arguments)
 
 APP = QApplication.instance() or QApplication([])
-DEVICE = Device('000085000014cad9', 'Testkamera', '/dev/fw1', '/test/bus', 0, True)
+DEVICE = Device('0011223344556677', 'Testkamera', '/dev/fw1', '/test/bus', 0, True)
 
 
 def wait_until(predicate, timeout=30):

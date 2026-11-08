@@ -68,13 +68,15 @@ Missing timecode, unconfirmed camera control, or a blocked reset aborts recovery
 and keeps the recorded footage. Stop the camera manually if recovery fails.
 
 For unattended recovery, an administrator can install the fixed-controller
-service (substitute the actual PCI address and user ID):
+service (the controller and requesting user are detected automatically):
 
 ```sh
-pkexec /usr/bin/python3 scripts/install-recovery-service.py --address 0000:06:00.0 --owner 1000
+pkexec /usr/bin/python3 scripts/install-recovery-service.py
 ```
 
-Without this service, recovery requires an administrator authorization dialog.
+The unattended service requires systemd and polkit >= 0.106 (Ubuntu 24.04 or newer).
+On Ubuntu 22.04, use the administrator-authorized fallback. Without this service,
+recovery requires an administrator authorization dialog.
 The service is not started at boot and only permits the specified active local
 user to start recovery of the specified controller. A driver reset cannot
 guarantee recovery from a kernel hang or prevent recurring DMA faults.
@@ -105,7 +107,7 @@ packages, then clone and run the app:
 Ubuntu/Debian:
 
 ```bash
-sudo apt install git python3 python3-venv dvgrab ffmpeg qt6-wayland libegl1 libxcb-cursor0
+sudo apt install git python3 python3-venv dvgrab ffmpeg qt6-wayland libegl1 libxcb-cursor0 pkexec polkitd libraw1394-11 libavc1394-0
 ```
 
 Arch/CachyOS:

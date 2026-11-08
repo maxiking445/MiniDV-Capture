@@ -45,6 +45,7 @@ install_components
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('apt-get update', result.stdout)
                 self.assertIn('python3-venv dvgrab ffmpeg', result.stdout)
+                self.assertIn('pkexec polkitd libraw1394-11 libavc1394-0', result.stdout)
                 self.assertEqual('python3-pyside6.qtwidgets' in result.stdout, native)
                 if not native:
                     self.assertIn('user-owned virtual environment', result.stdout)

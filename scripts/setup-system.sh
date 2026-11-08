@@ -4,17 +4,17 @@ set -euo pipefail
 install_components() {
     if command -v pacman >/dev/null; then
         # No -Sy: avoid partial system upgrades.
-        pacman -S --needed --noconfirm python pyside6 qt6-svg qt6-wayland dvgrab ffmpeg
+        pacman -S --needed --noconfirm python pyside6 qt6-svg qt6-wayland dvgrab ffmpeg polkit
     elif command -v apt-get >/dev/null; then
         apt-get update
-        apt-get install -y python3 python3-venv dvgrab ffmpeg qt6-wayland libxcb-cursor0 libegl1
+        apt-get install -y python3 python3-venv dvgrab ffmpeg qt6-wayland libxcb-cursor0 libegl1 pkexec polkitd libraw1394-11 libavc1394-0
         if apt-cache show python3-pyside6.qtwidgets >/dev/null 2>&1; then
             apt-get install -y python3-pyside6.qtwidgets python3-pyside6.qtsvg
         else
             echo 'System PySide6 is unavailable. The launcher will install it in a user-owned virtual environment.'
         fi
     elif command -v dnf >/dev/null; then
-        dnf install -y python3 python3-pyside6 qt6-qtsvg qt6-qtwayland dvgrab
+        dnf install -y python3 python3-pyside6 qt6-qtsvg qt6-qtwayland dvgrab polkit
         if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             # Prefer full FFmpeg if already available from configured repositories.
             if dnf list --available ffmpeg >/dev/null 2>&1; then

@@ -9,6 +9,34 @@ import re
 import subprocess
 
 
+def installation_target(address=None, uid=None, pci=Path('/sys/bus/pci/devices')):
+    if uid is None:
+        value = os.environ.get('PKEXEC_UID') or os.environ.get('SUDO_UID')
+        if not value or not value.isdecimal() or int(value) <= 0:
+            raise RuntimeError('Cannot identify the desktop user; specify --owner USER_ID.')
+        uid = int(value)
+    if address is None:
+        controllers = [p.name for p in pci.iterdir()
+                       if (p / 'class').read_text().strip() == '0x0c0010']
+        if len(controllers) != 1:
+            raise RuntimeError('Automatic recovery requires exactly one OHCI FireWire controller.')
+        address = controllers[0]
+    return address, uid
+
+
+def check_service_support():
+    if not Path('/run/systemd/system').is_dir():
+        raise RuntimeError('The recovery service requires a running systemd system.')
+    result = subprocess.run(['pkaction', '--version'], capture_output=True,
+                            text=True, check=True, timeout=10)
+    version = re.search(r'\b(\d+)\.(\d+)\b|\b(\d{3,})\b', result.stdout)
+    supported = version and (int(version[3]) >= 106 if version[3] else
+                             (int(version[1]), int(version[2])) >= (0, 106))
+    if not supported:
+        raise RuntimeError('Unattended recovery requires polkit >= 0.106 with JavaScript rules '
+                           '(for example Ubuntu 24.04). Use administrator-authorized recovery on older systems.')
+
+
 def service_files(address, uid, user):
     if not re.fullmatch(r'[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]', address):
         raise ValueError('Invalid PCI address')
@@ -42,9 +70,11 @@ polkit.addRule(function(action, subject) {{
     return unit, policy
 
 
-def install(address, uid):
+def install(address=None, uid=None):
     if os.geteuid() != 0:
         raise RuntimeError('Administrator authorization is required')
+    address, uid = installation_target(address, uid)
+    check_service_support()
     user = pwd.getpwuid(uid).pw_name
     unit, policy = service_files(address, uid, user)
     destination = Path('/usr/local/lib/minidv-capture')
@@ -65,6 +95,7 @@ def install(address, uid):
             temporary.unlink(missing_ok=True)
     write(destination / 'recover-firewire.py', Path(__file__).with_name('recover-firewire.py').read_text())
     write(Path('/etc/systemd/system/minidv-firewire-recover.service'), unit)
+    Path('/etc/polkit-1/rules.d').mkdir(parents=True, exist_ok=True, mode=0o755)
     write(Path('/etc/polkit-1/rules.d/49-minidv-firewire-recover.rules'), policy)
     subprocess.run(['systemctl', 'daemon-reload'], check=True, timeout=15)
     write(destination / 'recovery-service.json', json.dumps({'address': address, 'uid': uid}))
@@ -73,7 +104,10 @@ def install(address, uid):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--address', required=True)
-    parser.add_argument('--owner', required=True, type=int)
+    parser.add_argument('--address', help='PCI address; defaults to the single OHCI controller')
+    parser.add_argument('--owner', type=int, help='Desktop user ID; defaults to the pkexec/sudo caller')
     args = parser.parse_args()
-    install(args.address, args.owner)
+    try:
+        install(args.address, args.owner)
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as exc:
+        parser.exit(1, str(exc) + '\n')

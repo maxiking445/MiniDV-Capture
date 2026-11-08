@@ -12,6 +12,22 @@ from .process import available, start_shutdown_watchdog
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--merge-dv':
+        from .merge_worker import copy_merge
+        try:
+            copy_merge(sys.argv[2])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+    if len(sys.argv) in (3, 4) and sys.argv[1] == '--recover-transport':
+        from .transport_recovery import run
+        try:
+            run(sys.argv[2], sys.argv[3] if len(sys.argv) == 4 else None)
+        except (OSError, ValueError, RuntimeError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
     smoke_test = '--smoke-test' in sys.argv
     if len(sys.argv) == 3 and sys.argv[1] in ('--media-status', '--transport-stop'):
         from .tape_change import query_medium

@@ -3,10 +3,12 @@ import os
 import shutil
 import time
 import uuid
+import sys
+import json
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 from .devices import Device, discover, blocked_firewire_tasks
-from .process import available, executable, interrupt
-from .storage import Store
+from .process import available, executable, interrupt, start_background
+from .storage import Store, atomic_json
 from .tape_change import pending_queries
 
 
@@ -34,12 +36,14 @@ class CaptureSession(QObject):
     log = Signal(str)
     completed = Signal(dict)
     failed = Signal(dict)
+    attention = Signal(dict, str)
+    recovery_requested = Signal(object)
 
-    def __init__(self, store: Store, job: dict, device: Device, parent=None, resume=False):
+    def __init__(self, store: Store, job: dict, device: Device, parent=None, resume=False, automatic=False):
         super().__init__(parent)
         self.store, self.job, self.device = store, job, device
         self.resume = resume
-        self.manual = True if resume else job['options']['manual']
+        self.manual = (not automatic) if resume else job['options']['manual']
         self.rewind = False if resume else job['options'].get('rewind', False)
         self.output_name = f'capture-resume-{uuid.uuid4().hex}' if resume else 'capture'
         self.process = QProcess(self)
@@ -60,8 +64,13 @@ class CaptureSession(QObject):
         self.rate = 0
         self.reason = ''
         self.finished_once = False
+        self.merging = False
         self.damaged = False
         self.log_tail = ''
+        self.stall_warned = False
+        self.signal_interrupted = False
+        self.want_recovery = False
+        self.recovery_sent = False
         self.logfile = Path(job['directory']) / 'capture.log'
         self.process_started_ok = False
         self.stop_deadline = QTimer(self)
@@ -75,16 +84,28 @@ class CaptureSession(QObject):
         message = ('Capture process did not exit after interruption and forced termination. '
                    'FireWire may be blocked. No new capture will start on this bus. '
                    'Stop playback and power off the camera. Raw footage is kept; you can close the app.')
+        if self.reason != 'cancel':
+            self.reason = 'error'
         self._write_log(message)
         self.log.emit(message)
         # Keep the bus reserved and footage unavailable for conversion/deletion
         # until the child really exits. A timeout is not a completed capture.
-        self.store.update(self.job, error=message, capture_incomplete=True)
+        try:
+            self.store.update(self.job, error=message, capture_incomplete=True)
+        except OSError as exc:
+            self.log.emit(f'Could not save capture error: {exc}')
+        self.attention.emit(self.job, message)
+        self.request_recovery()
         self.changed.emit()
+
+    def request_recovery(self):
+        if self.want_recovery and self.reason != 'cancel' and not self.recovery_sent:
+            self.recovery_sent = True
+            self.recovery_requested.emit(self)
 
     @property
     def active(self):
-        return not self.finished_once
+        return not self.finished_once or self.merging
 
     def start(self):
         peers = [d for d in discover() if d.bus == self.device.bus]
@@ -128,6 +149,8 @@ class CaptureSession(QObject):
         self.log_tail = combined[-200:]
 
     def poll(self):
+        if self.reason or self.finished_once:
+            return
         now = time.monotonic()
         try:
             segments = list(Path(self.job['directory']).glob(self.output_name + '*.dv'))
@@ -135,6 +158,13 @@ class CaptureSession(QObject):
             self.rate = max(0, size - self.bytes)
             if size > self.bytes:
                 self.last_data = now
+                if self.stall_warned:
+                    self.signal_interrupted = True
+                    message = 'DV data is arriving again. Check the recording for a gap before continuing.'
+                    self._write_log(message)
+                    self.log.emit(message)
+                    self.attention.emit(self.job, message)
+                self.stall_warned = False
                 if self.first_data is None:
                     self.first_data = now
             self.bytes = size
@@ -145,14 +175,31 @@ class CaptureSession(QObject):
             elif not self.bytes and now - self.started > (900 if self.job['options'].get('rewind') else 180):
                 self.stop('error', 'No DV data received. Check PLAYER/VCR mode and PLAY.')
             elif self.bytes and now - self.last_data >= self.job['options'].get('signal_timeout', 60):
-                self.stop('complete', 'No DV data for 60 seconds; treating this as tape end and starting conversion.')
+                self.want_recovery = self.job['options'].get('auto_recover', False)
+                timeout = self.job['options'].get('signal_timeout', 60)
+                self.stop('error', f'No DV data for {timeout} seconds. Tape end is not confirmed. '
+                          'Stop playback on the camera. Partial capture is kept; check the last saved footage '
+                          'before resuming with at least one minute of overlap.')
             elif self.first_data is not None and self.job['options'].get('duration', 0) and now - self.first_data >= self.job['options']['duration'] * 60:
                 self.stop('complete')
+            elif self.bytes and now - self.last_data >= 10 and not self.stall_warned:
+                self.stall_warned = True
+                message = ('No DV data for 10 seconds. The tape may still be playing without being recorded. '
+                           'Check the camera and stop playback if necessary. Waiting for data; '
+                           'tape end has not been confirmed.')
+                self._write_log(message)
+                self.log.emit(message)
+                self.attention.emit(self.job, message)
         except OSError as exc:
             self.stop('error', str(exc))
         self.changed.emit()
 
     def stop(self, reason='complete', error=''):
+        if self.merging:
+            if reason == 'cancel':
+                self.reason = 'cancel'
+                interrupt(self.merge_process)
+            return
         if self.finished_once or self.reason:
             return
         self.reason = reason
@@ -162,10 +209,18 @@ class CaptureSession(QObject):
             self.log.emit('Stop playback on the camera; manual mode does not send AV/C STOP.')
         self.job['error'] = error
         self.timer.stop()
-        self._write_log(f'Stopping capture: reason={reason}; {error or "no additional error"}')
-        self.log.emit(f'Stopping capture: {reason}' + (f' ({error})' if error else ''))
+        # Schedule termination before persistence: even a full/unwritable disk
+        # must not prevent sending the capture process its stop signal.
         interrupt(self.process)
         self.stop_deadline.start()
+        if reason == 'error':
+            try:
+                self.store.update(self.job, error=error, bytes=self.bytes, capture_incomplete=True)
+            except OSError as exc:
+                self.log.emit(f'Could not save capture error: {exc}')
+            self.attention.emit(self.job, error)
+        self._write_log(f'Stopping capture: reason={reason}; {error or "no additional error"}')
+        self.log.emit(f'Stopping capture: {reason}' + (f' ({error})' if error else ''))
 
     def process_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
@@ -186,14 +241,15 @@ class CaptureSession(QObject):
         self.bytes = sum(part.stat().st_size for part in segments if part.is_file())
         regular = self.reason == 'complete' or (
             not self.reason and code == 0 and status == QProcess.ExitStatus.NormalExit
-            and not self.job['options']['manual'])
+            and not self.manual)
         # Never accept a forced kill, empty file, extra segments or reported drops.
         regular = regular and code == 0 and status != QProcess.ExitStatus.CrashExit and self.bytes > 0 and not self.damaged
-        regular = regular and len(segments) == 1
+        regular = regular and len(segments) == 1 and not self.signal_interrupted
         if regular:
             try:
                 if self.resume:
-                    self.store.finish_resume_merge(self.job)
+                    self.start_merge()
+                    return
                 else:
                     self.store.update(self.job, state='queued', bytes=self.bytes,
                                       capture_incomplete=False, error='')
@@ -204,9 +260,50 @@ class CaptureSession(QObject):
                 self.failed.emit(self.job)
         else:
             error = self.job.get('error') or ('Cancelled; raw footage kept.' if self.reason == 'cancel'
-                    else 'Incomplete capture or damaged/dropped frames. Check the raw footage and capture.log.')
-            self.store.update(self.job, state='cancelled' if self.reason == 'cancel' else 'error',
+                    else 'DV reception was interrupted and resumed; a gap may be missing. Check the raw footage and capture.log.'
+                    if self.signal_interrupted else 'Incomplete capture or damaged/dropped frames. Check the raw footage and capture.log.')
+            self.store.update(self.job, state='cancelled' if self.reason == 'cancel' else 'recovering' if self.want_recovery else 'error',
                               bytes=self.bytes, capture_incomplete=True, error=error)
+            if self.want_recovery and self.reason != 'cancel':
+                self.request_recovery()
+            elif not self.recovery_sent:
+                self.failed.emit(self.job)
+        self.changed.emit()
+
+    def start_merge(self):
+        plan = self.store.finish_resume_merge(self.job, prepare_only=True)
+        manifest = Path(self.job['directory']) / 'resume-merge.json'
+        atomic_json(manifest, plan)
+        self.store.update(self.job, state='merging')
+        self.merging = True
+        self.merge_process = QProcess(self)
+        self.merge_process.finished.connect(self.merge_finished)
+        self.merge_process.errorOccurred.connect(self.merge_error)
+        args = [] if getattr(sys, 'frozen', False) else ['-m', 'minidv_capture']
+        start_background(self.merge_process, sys.executable, args + ['--merge-dv', str(manifest)])
+        self.changed.emit()
+
+    def merge_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            self.merge_finished(-1, QProcess.ExitStatus.CrashExit)
+
+    def merge_finished(self, code, status):
+        if not self.merging:
+            return
+        self.merging = False
+        output = bytes(self.merge_process.readAllStandardOutput()).decode(errors='replace')
+        error = bytes(self.merge_process.readAllStandardError()).decode(errors='replace')
+        try:
+            if self.reason == 'cancel' or code != 0 or status != QProcess.ExitStatus.NormalExit:
+                # The worker only copies: it never replaces or deletes sources.
+                self.job.pop('resume_merge_pending', None)
+                raise ValueError(error or 'DV merge interrupted; all source segments are kept.')
+            result = json.loads(output)
+            self.store.finish_resume_merge(self.job, prepared=result['fingerprint'])
+            self.completed.emit(self.job)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            self.store.update(self.job, state='cancelled' if self.reason == 'cancel' else 'error',
+                              capture_incomplete=True, error=str(exc))
             self.failed.emit(self.job)
         self.changed.emit()
 
@@ -216,12 +313,15 @@ class CaptureManager(QObject):
     log = Signal(str)
     completed = Signal(dict)
     failed = Signal(dict)
+    attention = Signal(dict, str)
+    recovery_requested = Signal(object)
 
     def __init__(self, store: Store, parent=None):
         super().__init__(parent)
         self.store = store
         self.sessions = {}
         self.health = None
+        self.recovery_guard = None
 
     def active(self):
         return [s for s in self.sessions.values() if s.active]
@@ -258,11 +358,13 @@ class CaptureManager(QObject):
         session.log.connect(self.log)
         session.completed.connect(self.completed)
         session.failed.connect(self.failed)
+        session.attention.connect(self.attention)
+        session.recovery_requested.connect(self.recovery_requested)
         session.start()
         self.changed.emit()
         return session
 
-    def resume(self, job):
+    def resume(self, job, automatic=False):
         self.check_transport_stopped(Device(**job['device']))
         if not job.get('capture_incomplete'):
             raise ValueError('This tape has no interrupted capture to continue.')
@@ -283,7 +385,7 @@ class CaptureManager(QObject):
         if shutil.disk_usage(job['directory']).free < 2 * 1024**3:
             raise RuntimeError('At least 2 GiB of free space is required to continue a capture.')
         self.store.update(job, state='capturing', capture_incomplete=True, error='')
-        session = CaptureSession(self.store, job, device, self, resume=True)
+        session = CaptureSession(self.store, job, device, self, resume=True, automatic=automatic)
         previous = self.sessions.get(device.guid)
         if previous:
             previous.deleteLater()
@@ -292,11 +394,15 @@ class CaptureManager(QObject):
         session.log.connect(self.log)
         session.completed.connect(self.completed)
         session.failed.connect(self.failed)
+        session.attention.connect(self.attention)
+        session.recovery_requested.connect(self.recovery_requested)
         session.start()
         self.changed.emit()
         return session
 
     def check_transport_stopped(self, device):
+        if self.recovery_guard and self.recovery_guard.busy and not self.recovery_guard.allow_resume:
+            raise RuntimeError('FireWire recovery is still pending; no new capture was started.')
         if self.health is not None:
             self.health.check(device)
         blocked = blocked_firewire_tasks()

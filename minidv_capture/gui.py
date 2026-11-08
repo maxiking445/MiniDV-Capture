@@ -17,11 +17,12 @@ from .preview import LivePreview
 from .preferences import english_options
 from .tape_change import TapeChangeWatcher
 from .recovery import FireWireRecovery
+from .automatic_recovery import AutomaticRecovery
 from . import __version__
 from .setup import SetupDialog, project_root
 from .translations import LANGUAGES
 
-STATES = {'capturing': 'Capturing', 'queued': 'Queued', 'converting': 'Converting',
+STATES = {'merging': 'Joining DV segments', 'recovering': 'Recovering capture', 'capturing': 'Capturing', 'queued': 'Queued', 'converting': 'Converting',
           'verifying': 'Verifying output', 'done': 'Done', 'error': 'Capture error',
           'cancelled': 'Cancelled', 'interrupted': 'Interrupted', 'conversion_error': 'Conversion error'}
 MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE = 1_100_000_000  # About five minutes of DV video.
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         self.queue = ConversionQueue(store, self)
         self.devices = []
         self.dialogs = []
+        self.capture_alerts = {}
         self.tape_watchers = {}
         self.retry_capture = None
         self.health = None
@@ -49,6 +51,7 @@ class MainWindow(QMainWindow):
         self.recovery = FireWireRecovery(self)
         self.recovery.finished.connect(self.recovery_finished)
         self.recovery_retry = None
+        self.automatic = AutomaticRecovery(self.captures, self.recovery, self)
         try:
             self.device_options = json.loads(self.settings.value('device_options', '{}'))
             if not isinstance(self.device_options, dict):
@@ -200,6 +203,10 @@ class MainWindow(QMainWindow):
         self.auto_next.setToolTip('Uses AV/C cassette detection and automatic playback. Falls back to Start next tape if unsupported.')
         self.auto_next.toggled.connect(self.auto_next_changed)
         form.addRow(self.auto_next)
+        self.auto_recover = QCheckBox('Recover stalled capture with 3-minute overlap')
+        self.auto_recover.setChecked(True)
+        self.auto_recover.setToolTip('Requires administrator authorization and confirmed camera control. At most two recovery attempts per tape; original footage is kept.')
+        form.addRow(self.auto_recover)
         self.add_settings_page(capture_box)
         convert_box = QGroupBox()
         convert_form = QFormLayout(convert_box)
@@ -380,6 +387,9 @@ class MainWindow(QMainWindow):
         self.captures.log.connect(self.append_log)
         self.captures.completed.connect(self.tape_complete)
         self.captures.failed.connect(self.capture_failed)
+        self.captures.attention.connect(self.capture_attention)
+        self.automatic.message.connect(self.capture_attention)
+        self.automatic.failed.connect(self.capture_failed)
         self.queue.changed.connect(self.refresh)
         self.queue.log.connect(self.append_log)
         self.queue.done.connect(lambda j: self.notify(self.tr('Conversion complete'), j['name']))
@@ -545,7 +555,7 @@ class MainWindow(QMainWindow):
 
     def options(self):
         return {'manual': self.mode.currentIndex() == 0, 'rewind': self.rewind.isChecked() and self.mode.currentIndex() == 1,
-                'auto_next': self.auto_next.isChecked(),
+                'auto_next': self.auto_next.isChecked(), 'auto_recover': self.auto_recover.isChecked(),
                 'duration': self.duration.value(), 'format': self.format.currentText(),
                 'quality': self.quality.currentText(), 'deinterlace': self.deinterlace.isChecked(),
                 'delete_raw': self.delete_raw.isChecked(), 'signal_timeout': 60}
@@ -562,6 +572,7 @@ class MainWindow(QMainWindow):
             self.rewind.setChecked(options.get('rewind', False))
             self.duration.setValue(options.get('duration', 0))
             self.auto_next.setChecked(options.get('auto_next', False))
+            self.auto_recover.setChecked(options.get('auto_recover', True))
             if self.auto_next.isChecked():
                 self.mode.setCurrentIndex(1)
             self.auto_next.blockSignals(False)
@@ -607,7 +618,7 @@ class MainWindow(QMainWindow):
             self.folder.setText(directory)
 
     def start_capture(self, _checked=False, device=None, options_override=None):
-        if self.recovery.running:
+        if self.automatic.busy:
             return
         device = device or self.selected_device()
         if not device:
@@ -645,27 +656,27 @@ class MainWindow(QMainWindow):
             self.error(str(exc))
 
     def recover_firewire(self, device, retry):
-        if self.recovery.running:
+        if self.automatic.busy:
             return
         if any(not session.reason for session in self.captures.active()) or self.queue.job:
             self.error(self.tr('Stop active captures and wait for conversion to finish before repairing FireWire.'))
             return
         self.recovery_retry = retry
         self.set_step(3)
-        self.capture_feedback.setText(self.tr('Repairing FireWire. Approve administrator access to reset the controller; capture will retry after recovery.'))
+        self.capture_feedback.setText(self.tr('Restarting the FireWire controller. Administrator authorization is required. Capture will not restart automatically.'))
         self.capture_feedback.show()
         self.recovery.start(Path(device.bus).name)
         self.refresh()
 
     def recovery_finished(self, success, message):
         self.append_log(message)
-        retry, self.recovery_retry = self.recovery_retry, None
+        self.recovery_retry = None
         if self.shutting_down:
             return
         self.refresh()
-        if success and retry:
-            self.capture_feedback.hide()
-            retry()
+        if success:
+            self.capture_feedback.setText(self.tr('Controller reinitialized. Camera control and DV reception still need to be checked. No capture was started.') + '\n' + message)
+            self.capture_feedback.show()
         else:
             self.capture_feedback.setText(self.tr('FireWire recovery failed. No new capture was started.') + '\n' + message)
             self.capture_feedback.show()
@@ -696,7 +707,7 @@ class MainWindow(QMainWindow):
         self.step_buttons[3].setIcon(self.record_step_icons[int(self.record_step_blink_on)])
 
     def cancel_all(self):
-        if not self.captures.active() and not self.queue.job:
+        if not self.captures.active() and not self.queue.job and not self.automatic.busy:
             return
         dialog = QMessageBox(QMessageBox.Icon.Warning, self.tr('Cancel all'),
             self.tr('Stop all active captures and the current conversion? Partial recordings will be kept; queued jobs will remain queued.'),
@@ -707,6 +718,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
         if dialog.clickedButton() != yes:
             return
+        self.automatic.cancel(notify=False)
         for guid in list(self.tape_watchers):
             self.stop_tape_watcher(guid)
         self.queue.cancel()
@@ -741,16 +753,16 @@ class MainWindow(QMainWindow):
         active = bool(session and session.active)
         self.preview.set_session(session if active and not session.reason else None)
         stopping = bool(active and session.reason)
-        self.start_button.setEnabled(bool(d) and not stopping and not self.recovery.running)
+        self.start_button.setEnabled(bool(d) and not stopping and not self.automatic.busy)
         self.start_button.setText(self.tr('Stopping…') if stopping else
                                   self.tr('Stop && convert') if active else self.tr('Start capture'))
         self.start_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaStop if active else QStyle.StandardPixmap.SP_MediaPlay))
         self.start_button.setStyleSheet('QPushButton#captureAction {background:#bc6c20;color:white;font-size:16px;font-weight:700;padding:8px 18px;border-radius:6px;}' if active else
                                         'QPushButton#captureAction {background:#267d48;color:white;font-size:16px;font-weight:700;padding:8px 18px;border-radius:6px;}')
-        has_tasks = bool(self.captures.active() or self.queue.job)
+        has_tasks = bool(self.captures.active() or self.queue.job or self.automatic.busy)
         self.cancel_all_button.setEnabled(has_tasks)
         # Track every camera, independently of the selected camera and wizard page.
-        recording = any(s.bytes and not s.reason for s in self.captures.active())
+        recording = any(s.bytes and not s.reason and not s.stall_warned for s in self.captures.active())
         if recording:
             if not self.record_step_timer.isActive():
                 self.step_buttons[3].setIconSize(QSize(48, 32))
@@ -769,11 +781,22 @@ class MainWindow(QMainWindow):
                       ' · ' + self.tr('Starting dvgrab…') if not session.process_started_ok else
                       ' · ' + self.tr('Waiting for DV data (may be rewinding)')
                       if session.job['options'].get('rewind') else ' · ' + self.tr('Waiting for DV data'))
-            if session.bytes:
+            if stopping:
+                suffix = ' · ' + self.tr('Stopping…')
+            elif session.stall_warned:
+                suffix = ' · ' + self.tr('DV reception stalled')
+            elif session.bytes:
                 suffix = ' · ' + self.tr('Capturing · DV data arriving')
             self.live.setText(f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02} · '
                               f'{session.bytes / 1e9:.2f} GB · {session.rate / 1e6:.1f} MB/s{suffix}')
-            if session.bytes and not stopping:
+            if stopping or session.stall_warned:
+                self.live_blink_timer.stop()
+                self.capture_feedback.setText(self.tr(session.job.get('error') or
+                    ('Stopping…' if stopping else 'DV reception stalled. Stop playback on the camera; the tape may be running without being recorded.')))
+                self.capture_feedback.show()
+                self.check_devices_button.hide()
+                self.retry_capture_button.hide()
+            elif session.bytes:
                 self.live_lamp.show()
                 if not self.live_blink_timer.isActive():
                     self.live_blink_on = True
@@ -902,10 +925,10 @@ class MainWindow(QMainWindow):
             self.error(str(exc))
 
     def resume_capture(self, job):
-        if self.recovery.running:
+        if self.automatic.busy:
             return
         dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Resume capture'),
-            self.tr('Put the camera at the point where the capture stopped. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.'),
+            self.tr('Check the end of the saved DV footage, then position the camera at least one minute BEFORE that point. The tape may have kept playing after recording stopped; rewinding one minute from its current position is not sufficient. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.'),
             QMessageBox.StandardButton.NoButton, self)
         start = dialog.addButton(self.tr('Start capture'), QMessageBox.ButtonRole.AcceptRole)
         dialog.addButton(self.tr('Cancel'), QMessageBox.ButtonRole.RejectRole)
@@ -1032,7 +1055,34 @@ class MainWindow(QMainWindow):
             pass
         return size >= MIN_CAPTURE_BYTES_FOR_TAPE_ADVANCE
 
+    def capture_attention(self, job, message):
+        self.append_log(job['name'] + ': ' + message)
+        if self.shutting_down:
+            return
+        self.capture_feedback.setText(job['name'] + ': ' + self.tr(message))
+        self.capture_feedback.show()
+        self.notify('Capture needs attention', job['name'] + ': ' + self.tr(message))
+        dialog = self.capture_alerts.get(job['id'])
+        if dialog is None:
+            dialog = QMessageBox(QMessageBox.Icon.Warning, self.tr('Capture needs attention'),
+                                 '', QMessageBox.StandardButton.Ok, self)
+            dialog.setWindowModality(Qt.WindowModality.NonModal)
+            self.capture_alerts[job['id']] = dialog
+            self.dialogs.append(dialog)
+            def cleanup():
+                self.capture_alerts.pop(job['id'], None)
+                if dialog in self.dialogs:
+                    self.dialogs.remove(dialog)
+                dialog.deleteLater()
+            dialog.finished.connect(cleanup)
+        dialog.setText(job['name'] + ': ' + self.tr(message))
+        dialog.show()
+        QApplication.beep()
+
     def capture_failed(self, job):
+        dialog = self.capture_alerts.get(job['id'])
+        if dialog is not None:
+            dialog.close()
         if self.shutting_down:
             self.append_log(job['name'] + ': ' + job['error'])
             return
@@ -1119,6 +1169,9 @@ class MainWindow(QMainWindow):
         self.capture_feedback.show()
 
     def firewire_fault(self, address, message):
+        if self.automatic.session and self.automatic.stage != 'controller':
+            if not address or address == self.automatic.address:
+                self.automatic.fail(message)
         self.append_log(message)
         self.capture_feedback.setText(message)
         self.capture_feedback.show()
@@ -1126,6 +1179,8 @@ class MainWindow(QMainWindow):
             self.stop_tape_watcher(guid)
         for session in self.captures.active():
             if not address or Path(session.device.bus).name.lower() == address:
+                if address and not session.reason:
+                    session.want_recovery = session.job['options'].get('auto_recover', False)
                 # A previous tape-end request must not queue suspect footage.
                 if session.reason:
                     session.reason = 'error'
@@ -1147,13 +1202,10 @@ class MainWindow(QMainWindow):
                 self.health.stop()
 
     def closeEvent(self, event):
-        if self.recovery.running:
-            self.recovery_retry = None
-            self.recovery.cancel()
         if self.shutting_down:
             event.ignore()
             return
-        if self.captures.active() or self.queue.job:
+        if self.captures.active() or self.queue.job or self.automatic.busy:
             accepted = self.system_shutdown
             if not accepted:
                 dialog = QMessageBox(QMessageBox.Icon.Question, self.tr('Tasks running'),
@@ -1167,6 +1219,7 @@ class MainWindow(QMainWindow):
             event.ignore()
             if accepted:
                 self.shutting_down = True
+                self.automatic.cancel(notify=False)
                 self.arm_shutdown_watchdog()
                 self.scan_timer.stop()
                 self.live_blink_timer.stop()
@@ -1200,7 +1253,7 @@ class MainWindow(QMainWindow):
         self.quit_requested.emit()
 
     def finish_shutdown(self):
-        if not self.captures.active() and not self.queue.job:
+        if not self.captures.active() and not self.queue.job and not self.automatic.busy:
             self.shutdown_timer.stop()
             self.shutting_down = False
             self.setEnabled(True)

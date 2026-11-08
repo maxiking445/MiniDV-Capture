@@ -37,6 +37,39 @@ class GuiTests(unittest.TestCase):
         APP.processEvents()
         self.temp.cleanup()
 
+    def test_capture_attention_is_visible_before_process_exits(self):
+        job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
+        with patch.object(self.window, 'notify') as notify, patch('minidv_capture.gui.QApplication.beep'):
+            self.window.captures.attention.emit(job, 'No DV data for 10 seconds')
+        self.assertIn('No DV data', self.window.capture_feedback.text())
+        self.assertTrue(self.window.capture_alerts[job['id']].isVisible())
+        notify.assert_called_once()
+        with patch('minidv_capture.gui.QApplication.beep'):
+            self.window.captures.attention.emit(job, 'Still blocked')
+        self.assertEqual(len(self.window.capture_alerts), 1)
+        self.assertEqual(len(self.window.dialogs), 1)
+        self.assertIn('Still blocked', self.window.capture_alerts[job['id']].text())
+        self.assertEqual(job['state'], 'capturing')
+
+    def test_stalled_capture_never_displays_data_arriving(self):
+        job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
+        session = CaptureSession(self.store, job, DEVICE, self.window.captures)
+        self.window.captures.sessions[DEVICE.guid] = session
+        session.bytes = 144000
+        session.stall_warned = True
+        try:
+            self.window.refresh()
+            self.assertIn(self.window.tr('DV reception stalled'), self.window.live.text())
+            self.assertFalse(self.window.live_blink_timer.isActive())
+            self.assertFalse(self.window.record_step_timer.isActive())
+            session.reason = 'error'
+            job['error'] = 'FireWire blocked'
+            self.window.refresh()
+            self.assertEqual(self.window.capture_feedback.text(), 'FireWire blocked')
+            self.assertIn(self.window.tr('Stopping…'), self.window.live.text())
+        finally:
+            session.finished_once = True
+
     def test_dma_warning_does_not_cancel_capture(self):
         job = self.store.create(self.root / 'tapes', 'Tape', DEVICE.to_dict(), options())
         session = CaptureSession(self.store, job, DEVICE, self.window.captures)
@@ -86,6 +119,20 @@ class GuiTests(unittest.TestCase):
         finally:
             session.finished_once = True
             self.window.finish_shutdown()
+
+    def test_pending_restart_helper_blocks_capture_after_timeout(self):
+        from unittest.mock import Mock
+        self.window.recovery.running = False
+        self.window.recovery.process = Mock()
+        self.window.recovery.process.poll.return_value = None
+        try:
+            with patch.object(self.window.captures, 'start') as start:
+                self.window.start_capture(device=DEVICE)
+            start.assert_not_called()
+            self.window.refresh()
+            self.assertFalse(self.window.start_button.isEnabled())
+        finally:
+            self.window.recovery.process = None
 
     def test_blocked_capture_does_not_reset_controller(self):
         with patch('minidv_capture.gui.available', return_value=True), \

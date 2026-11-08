@@ -124,6 +124,15 @@ class StorageTests(Base):
         self.assertFalse(restarted['capture_incomplete'])
         self.assertEqual(Path(job['raw']).read_bytes(), b'complete DV recording')
 
+    def test_resume_merge_includes_extra_original_dv_segments_in_order(self):
+        job = self.job()
+        raw = Path(job['raw'])
+        raw.write_bytes(b'first')
+        (raw.parent / 'capture002.dv').write_bytes(b'second')
+        (raw.parent / 'capture-resume-test.dv').write_bytes(b'overlap-and-rest')
+        self.store.finish_resume_merge(job)
+        self.assertEqual(raw.read_bytes(), b'firstsecondoverlap-and-rest')
+
     def test_finish_resume_merge_appends_segments_and_queues_conversion(self):
         job = self.job()
         raw = Path(job['raw'])
@@ -180,6 +189,48 @@ class StorageTests(Base):
 
 
 class CaptureTests(Base):
+    def test_resumed_capture_merges_asynchronously_and_keeps_sources_until_commit(self):
+        job = self.job()
+        Path(job['raw']).write_bytes(b'original')
+        s = CaptureSession(self.store, job, DEVICE, resume=True)
+        part = Path(job['directory']) / (s.output_name + '001.dv')
+        part.write_bytes(b'continued')
+        s.reason = 'complete'
+        s.finished(0, s.process.ExitStatus.NormalExit)
+        self.assertTrue(s.merging)
+        self.assertTrue(s.active)
+        self.assertEqual(Path(job['raw']).read_bytes(), b'original')
+        self.assertTrue(part.exists())
+        wait_until(lambda: not s.active)
+        self.assertEqual(job['state'], 'queued')
+        self.assertEqual(Path(job['raw']).read_bytes(), b'originalcontinued')
+        self.assertFalse(part.exists())
+        s.deleteLater()
+
+    def test_cancel_async_merge_keeps_all_original_segments(self):
+        job = self.job()
+        Path(job['raw']).write_bytes(b'original')
+        s = CaptureSession(self.store, job, DEVICE, resume=True)
+        part = Path(job['directory']) / (s.output_name + '001.dv')
+        part.write_bytes(b'continued')
+        s.reason = 'complete'
+        s.finished(0, s.process.ExitStatus.NormalExit)
+        s.stop('cancel')
+        wait_until(lambda: not s.active)
+        self.assertEqual(job['state'], 'cancelled')
+        self.assertEqual(Path(job['raw']).read_bytes(), b'original')
+        self.assertEqual(part.read_bytes(), b'continued')
+        self.assertNotIn('resume_merge_pending', job)
+        s.deleteLater()
+
+    def test_automatic_resume_uses_camera_play_control(self):
+        job = self.job()
+        Path(job['raw']).write_bytes(b'original')
+        s = CaptureSession(self.store, job, DEVICE, resume=True, automatic=True)
+        self.assertFalse(s.manual)
+        self.assertFalse(s.rewind)
+        s.deleteLater()
+
     def test_start_selects_broadcast_only_for_single_camera_on_known_controller(self):
         for device, peers, broadcast in (
             (DEVICE, [DEVICE], True),
@@ -225,6 +276,8 @@ class CaptureTests(Base):
         from PySide6.QtCore import QProcess
         s = CaptureSession(self.store, self.job(), DEVICE)
         completed = []
+        alerts = []
+        s.attention.connect(lambda job, message: alerts.append(message))
         s.completed.connect(completed.append)
         with patch.object(s.process, 'state', return_value=QProcess.ProcessState.Running):
             s.stop_timed_out()
@@ -233,6 +286,78 @@ class CaptureTests(Base):
         self.assertEqual(s.job['state'], 'capturing')
         self.assertTrue(s.job['capture_incomplete'])
         self.assertIn('did not exit', s.job['error'])
+        self.assertIn('did not exit', alerts[-1])
+        s.deleteLater()
+
+    def test_late_clean_exit_after_stuck_stop_does_not_queue_capture(self):
+        s = CaptureSession(self.store, self.job(), DEVICE)
+        Path(s.job['raw']).write_bytes(b'DV' * 72000)
+        s.reason = 'complete'
+        with patch.object(s.process, 'state', return_value=s.process.ProcessState.Running):
+            s.stop_timed_out()
+        s.finished(0, s.process.ExitStatus.NormalExit)
+        self.assertEqual(s.job['state'], 'error')
+        self.assertTrue(s.job['capture_incomplete'])
+        s.deleteLater()
+
+    def test_error_stop_still_interrupts_when_metadata_cannot_be_saved(self):
+        s = CaptureSession(self.store, self.job(), DEVICE)
+        alerts = []
+        s.attention.connect(lambda job, message: alerts.append(message))
+        with patch.object(self.store, 'update', side_effect=OSError('disk full')), \
+                patch('minidv_capture.capture.interrupt') as interrupt:
+            s.stop('error', 'No data')
+        interrupt.assert_called_once_with(s.process)
+        self.assertTrue(s.stop_deadline.isActive())
+        self.assertEqual(alerts, ['No data'])
+        s.stop_deadline.stop()
+        s.deleteLater()
+
+    def test_signal_loss_warns_then_errors_even_if_child_exits_cleanly(self):
+        s = self.running()
+        wait_until(lambda: Path(s.job['raw']).exists())
+        alerts = []
+        s.attention.connect(lambda job, message: alerts.append(message))
+        with patch('minidv_capture.capture.discover', return_value=[DEVICE]):
+            s.poll()
+            s.last_data = time.monotonic() - 11
+            s.poll()
+            s.poll()
+            self.assertEqual(len(alerts), 1)
+            self.assertEqual(s.reason, '')
+            s.last_data = time.monotonic() - 61
+            s.poll()
+        self.assertEqual(s.reason, 'error')
+        self.assertTrue(s.job['capture_incomplete'])
+        self.assertIn('not confirmed', alerts[-1])
+        wait_until(lambda: s.finished_once)
+        self.assertEqual(s.job['state'], 'error')
+        self.assertTrue(Path(s.job['raw']).exists())
+
+    def test_short_stall_recovers_and_warns_again_on_next_stall(self):
+        s = CaptureSession(self.store, self.job(), DEVICE)
+        alerts = []
+        s.attention.connect(lambda job, message: alerts.append(message))
+        raw = Path(s.job['raw'])
+        raw.write_bytes(b'DV' * 72000)
+        with patch('minidv_capture.capture.discover', return_value=[DEVICE]):
+            s.poll()
+            s.last_data = time.monotonic() - 11
+            s.poll()
+            with raw.open('ab') as f:
+                f.write(b'DV' * 72000)
+            s.poll()
+            self.assertFalse(s.stall_warned)
+            self.assertIn('arriving again', alerts[-1])
+            s.last_data = time.monotonic() - 11
+            s.poll()
+        self.assertEqual(len(alerts), 3)
+        self.assertEqual(s.reason, '')
+        self.assertTrue(s.signal_interrupted)
+        s.reason = 'complete'
+        s.finished(0, s.process.ExitStatus.NormalExit)
+        self.assertEqual(s.job['state'], 'error')
+        self.assertIn('gap', s.job['error'])
         s.deleteLater()
 
     def test_stop_queues_and_signals_next_tape(self):

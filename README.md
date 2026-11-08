@@ -58,6 +58,28 @@ recordings are kept by default.
 4. Watch the preview and progress in the job table. Click **Stop & convert**
    when the tape is finished.
 
+If DV data stops arriving during capture, the app warns after 10 seconds and
+requests a stop after 60 seconds. Silence alone does not confirm tape end.
+**Recover stalled capture with 3-minute overlap** enables at most two recovery
+attempts per recording: reinitialize the controller, confirm camera STOP, rewind
+three minutes before the last saved frame using timecode, and resume into a new
+DV segment. Segments are joined in a background process; overlap is preserved.
+Missing timecode, unconfirmed camera control, or a blocked reset aborts recovery
+and keeps the recorded footage. Stop the camera manually if recovery fails.
+
+For unattended recovery, an administrator can install the fixed-controller
+service (substitute the actual PCI address and user ID):
+
+```sh
+pkexec /usr/bin/python3 scripts/install-recovery-service.py --address 0000:06:00.0 --owner 1000
+```
+
+Without this service, recovery requires an administrator authorization dialog.
+The service is not started at boot and only permits the specified active local
+user to start recovery of the specified controller. A driver reset cannot
+guarantee recovery from a kernel hang or prevent recurring DMA faults.
+See [FireWire stability notes](docs/firewire-stability.md).
+
 The **Setup** button installs missing tools and configures FireWire permissions.
 It supports APT (Ubuntu/Debian), pacman (Arch/CachyOS) and DNF (Fedora). It may
 ask for administrator authorization; the app itself runs as your normal user.

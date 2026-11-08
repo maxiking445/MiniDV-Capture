@@ -54,7 +54,7 @@ class Store:
                 raise RuntimeError(f'Cannot read queue: {path}\n{exc}') from exc
         for job in self.jobs:
             job['options'] = english_options(job['options'])
-            if job['state'] == 'capturing':
+            if job['state'] in {'capturing', 'recovering'}:
                 previous_state = job['state']
                 job['interrupted_from'] = previous_state
                 job['capture_incomplete'] = True
@@ -84,14 +84,14 @@ class Store:
         atomic_json(self.path, {'version': 1, 'jobs': self.jobs})
 
     def clear_history(self):
-        remaining = [j for j in self.jobs if j['state'] in {'capturing', 'queued', 'converting', 'verifying'}]
+        remaining = [j for j in self.jobs if j['state'] in {'capturing', 'recovering', 'merging', 'queued', 'converting', 'verifying'}]
         removed = len(self.jobs) - len(remaining)
         atomic_json(self.path, {'version': 1, 'jobs': remaining})
         self.jobs = remaining
         return removed
 
     def remove(self, job):
-        if job['state'] in {'capturing', 'queued', 'converting', 'verifying'}:
+        if job['state'] in {'capturing', 'recovering', 'merging', 'queued', 'converting', 'verifying'}:
             raise ValueError('Stop or finish this tape before removing it from history.')
         index = next((i for i, item in enumerate(self.jobs) if item['id'] == job['id']), None)
         if index is None:
@@ -104,7 +104,7 @@ class Store:
             raise
         return True
 
-    def finish_resume_merge(self, job):
+    def finish_resume_merge(self, job, *, prepare_only=False, prepared=None):
         """Atomically append saved continuation segments to this tape's DV file."""
         directory = Path(job['directory']).resolve()
         raw = Path(job['raw'])
@@ -119,7 +119,10 @@ class Store:
             expected_size = int(pending['expected_size'])
             sizes = pending['sizes']
         else:
-            parts = sorted(directory.glob('capture-resume-*.dv'),
+            originals = sorted((p for p in directory.glob('capture*.dv')
+                                if re.fullmatch(r'capture[0-9]+\.dv', p.name) and p != raw),
+                               key=lambda p: int(p.stem[len('capture'):]))
+            parts = originals + sorted(directory.glob('capture-resume-*.dv'),
                            key=lambda p: (p.stat().st_mtime_ns, p.name))
             if not parts:
                 raise ValueError('No resumed DV segments were found')
@@ -130,11 +133,13 @@ class Store:
             expected_size = base_size + sum(sizes.values())
             names = list(sizes)
             pending = {'parts': names, 'sizes': sizes, 'base_size': base_size,
-                       'expected_size': expected_size, 'base_fingerprint': fingerprint(raw)}
+                       'expected_size': expected_size, 'base_fingerprint': fingerprint(raw),
+                       'part_fingerprints': {p.name: fingerprint(p) for p in parts}}
             self.update(job, resume_merge_pending=pending)
 
         if any(not isinstance(name, str) or Path(name).name != name
-               or not name.startswith('capture-resume-') or not name.endswith('.dv') for name in names):
+               or not (name.startswith('capture-resume-') and name.endswith('.dv')
+                       or re.fullmatch(r'capture[0-9]+\.dv', name) and name != raw.name) for name in names):
             raise ValueError('Unsafe resumed segment name')
 
         if raw.stat().st_size == expected_size:
@@ -152,17 +157,27 @@ class Store:
                     raise ValueError(f'Resumed segment is missing or unsafe: {name}')
                 if part.stat().st_size != int(sizes[name]):
                     raise ValueError(f'Resumed segment changed during merge: {name}')
+                expected = pending.get('part_fingerprints', {}).get(name)
+                if expected is not None and fingerprint(part) != expected:
+                    raise ValueError(f'Resumed segment changed during merge: {name}')
                 parts.append(part)
             temp = raw.with_name(raw.name + '.merge.tmp')
             if temp.is_symlink():
                 raise ValueError('Unsafe temporary merge path')
-            with temp.open('wb') as output:
-                for source in [raw, *parts]:
-                    with source.open('rb') as incoming:
-                        while chunk := incoming.read(1024 * 1024):
-                            output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
+            if prepare_only:
+                return {'sources': [str(p) for p in [raw, *parts]],
+                        'fingerprints': [fingerprint(p) for p in [raw, *parts]],
+                        'temp': str(temp), 'size': expected_size}
+            if prepared is None:
+                with temp.open('wb') as output:
+                    for source in [raw, *parts]:
+                        with source.open('rb') as incoming:
+                            while chunk := incoming.read(1024 * 1024):
+                                output.write(chunk)
+                    output.flush()
+                    os.fsync(output.fileno())
+            elif fingerprint(temp) != prepared or temp.stat().st_size != expected_size:
+                raise ValueError('Prepared merge changed or has the wrong size')
             pending['merged_fingerprint'] = fingerprint(temp)
             self.update(job, resume_merge_pending=pending)
             os.replace(temp, raw)

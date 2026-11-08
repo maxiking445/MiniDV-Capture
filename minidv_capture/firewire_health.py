@@ -20,6 +20,7 @@ class FireWireHealth(QObject):
         super().__init__(parent)
         self.faults = {}
         self.live_faults = set()
+        self.fault_serials = {}
         self.dma_warnings = set()
         self.ready = False
         self.error = 'Checking the kernel log for FireWire faults. Please retry shortly.'
@@ -96,6 +97,7 @@ class FireWireHealth(QObject):
                         'If the computer stutters or capture stalls, stop playback on the camera. '
                         'Kernel: ' + line[:2048])
             elif self.following:
+                self.fault_serials[address] = self.fault_serials.get(address, 0) + 1
                 # A historical warning must not suppress the first new fault.
                 if address not in self.live_faults:
                     self.faults[address] = line[:2048]

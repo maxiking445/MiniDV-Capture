@@ -237,4 +237,42 @@ STRINGS = {
         'Kassettenname und Speicherort festlegen und die Aufnahmeeinstellungen prüfen.',
     'Choose the output format and quality used after capture.':
         'Ausgabeformat und Qualität für die anschließende Konvertierung auswählen.',
+    'Capture needs attention':
+        'Aufnahme prüfen',
+    'DV reception stalled':
+        'DV-Empfang steht still',
+    'DV reception stalled. Stop playback on the camera; the tape may be running without being recorded.':
+        'DV-Empfang steht still. Wiedergabe an der Kamera stoppen; das Band läuft möglicherweise ohne Aufnahme weiter.',
+    'No DV data for 10 seconds. The tape may still be playing without being recorded. Check the camera and stop playback if necessary. Waiting for data; tape end has not been confirmed.':
+        'Seit 10 Sekunden keine DV-Daten. Das Band läuft möglicherweise ohne Aufnahme weiter. Prüfe die Kamera und stoppe gegebenenfalls die Wiedergabe. Die App wartet auf Daten; ein Bandende ist nicht bestätigt.',
+    'DV data is arriving again. Check the recording for a gap before continuing.':
+        'DV-Daten treffen wieder ein. Prüfe die Aufnahme auf eine fehlende Szene, bevor du fortfährst.',
+    'No DV data for 60 seconds. Tape end is not confirmed. Stop playback on the camera. Partial capture is kept; check the last saved footage before resuming with at least one minute of overlap.':
+        'Seit 60 Sekunden keine DV-Daten. Ein Bandende ist nicht bestätigt. Stoppe die Wiedergabe an der Kamera. Die Teilaufnahme bleibt erhalten. Prüfe die letzte gespeicherte Szene und setze mindestens eine Minute davor fort.',
+    'DV reception was interrupted and resumed; a gap may be missing. Check the raw footage and capture.log.':
+        'Der DV-Empfang war unterbrochen und kam zurück; es können Szenen fehlen. Prüfe die Rohaufnahme und capture.log.',
+    'Capture process did not exit after interruption and forced termination. FireWire may be blocked. No new capture will start on this bus. Stop playback and power off the camera. Raw footage is kept; you can close the app.':
+        'Der Aufnahmeprozess wurde trotz Abbruch und erzwungenem Beenden nicht beendet. FireWire ist möglicherweise blockiert. Auf diesem Bus startet keine weitere Aufnahme. Stoppe die Wiedergabe und schalte die Kamera aus. Die Rohaufnahme bleibt erhalten; du kannst die App schließen.',
+    'Check the end of the saved DV footage, then position the camera at least one minute BEFORE that point. The tape may have kept playing after recording stopped; rewinding one minute from its current position is not sufficient. The app cannot seek to the exact stop position. Capture will start without rewinding; press PLAY on the camera when the app is waiting. The new DV segment will be appended to the existing tape capture when you stop it.':
+        'Prüfe das Ende der gespeicherten DV-Aufnahme und spule die Kamera mindestens eine Minute VOR diese Stelle. Das Band kann nach dem Aufnahmestopp weitergelaufen sein; eine Minute zurück von der aktuellen Bandposition reicht dann nicht aus. Die App kann nicht exakt zu dieser Stelle suchen. Die Aufnahme startet ohne Zurückspulen; drücke PLAY an der Kamera, sobald die App wartet. Beim Beenden wird der neue DV-Abschnitt an die vorhandene Aufnahme angehängt.',
+    'Restarting the FireWire controller. Administrator authorization is required. Capture will not restart automatically.':
+        'FireWire-Controller wird neu gestartet. Administratorberechtigung ist erforderlich. Die Aufnahme startet anschließend nicht automatisch.',
+    'Controller reinitialized. Camera control and DV reception still need to be checked. No capture was started.':
+        'Controller neu initialisiert. Kamerasteuerung und DV-Empfang müssen noch geprüft werden. Es wurde keine Aufnahme gestartet.',
+    'Recovering capture':
+        'Aufnahme wird wiederhergestellt',
+    'Joining DV segments':
+        'DV-Abschnitte werden zusammengeführt',
+    'Recover stalled capture with 3-minute overlap':
+        'Aufnahme bei Stillstand mit 3 Minuten Überlappung fortsetzen',
+    'Requires administrator authorization and confirmed camera control. At most two recovery attempts per tape; original footage is kept.':
+        'Erfordert Administratorberechtigung und bestätigte Kamerasteuerung. Höchstens zwei Wiederherstellungsversuche je Aufnahme; Rohaufnahmen bleiben erhalten.',
+    'Restarting FireWire after stalled capture. Administrator authorization may be required. Raw footage is kept.':
+        'FireWire wird nach dem Aufnahmestillstand neu gestartet. Eine Administratorfreigabe kann erforderlich sein. Die Rohaufnahme bleibt erhalten.',
+    'Controller restarted. Stopping the camera and rewinding to three minutes before the last saved scene.':
+        'Controller neu gestartet. Kamera wird gestoppt und drei Minuten vor die letzte gespeicherte Szene zurückgespult.',
+    'Capture resumed in a new DV segment with overlap. Segments will be joined when capture finishes normally.':
+        'Aufnahme mit Überlappung in einem neuen DV-Abschnitt fortgesetzt. Die Abschnitte werden beim regulären Beenden zusammengeführt.',
+    'Automatic recovery cancelled. Stop playback on the camera. All recorded segments are kept.':
+        'Automatische Wiederherstellung abgebrochen. Stoppe die Wiedergabe an der Kamera. Alle aufgenommenen Abschnitte bleiben erhalten.',
 }
